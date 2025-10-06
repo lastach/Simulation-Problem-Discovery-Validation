@@ -4,12 +4,12 @@
 # streamlit run app.py
 # --------------------------------------------------------------
 
-import random, json
+import random
 from copy import deepcopy
 import streamlit as st
 import streamlit.components.v1 as components
 
-# Optional plotting (app still loads if matplotlib isn't present yet)
+# Optional plotting
 try:
     import matplotlib.pyplot as plt
     import numpy as np
@@ -17,7 +17,7 @@ try:
 except Exception:
     _HAS_MPL = False
 
-# Make persona sampling stable across reruns (prevents “changing” cards)
+# Make sampling stable across reruns
 random.seed(42)
 
 # ================== Market brief ==================
@@ -120,9 +120,8 @@ PERSONAS += [
             {"referral_stagnation":"Partner network push"}, 0.60,[ANEC[0]]),
 ]
 
-# ================== Flash items (10) with full profile fields ==================
+# ================== Flash items (10) ==================
 def flash_from_persona(p):
-    # map persona primary pain to a short status/challenge
     primary = max(p["pains"], key=lambda k: p["pains"][k])
     status = {
         "cac_volatility": "Demand swings when ad costs spike.",
@@ -149,15 +148,14 @@ def flash_from_persona(p):
         "challenges": challenges,
         "primary_pain": primary
     }
+FLASH_ITEMS = [flash_from_persona(p) for p in PERSONAS][:10]
 
-FLASH_ITEMS = [flash_from_persona(p) for p in PERSONAS][:10]  # 10 items
-
-# ================== Channels (UI labels) ==================
+# ================== Channels (with yield + bias) ==================
 CHANNELS = {
-    "email_list": {"label":"Email List", "bias":{"multi":0.5, "solo":0.5}},
-    "cold_dm":    {"label":"Cold DMs", "bias":{"multi":0.4, "solo":0.6}},
-    "forums":     {"label":"Industry Forums", "bias":{"multi":0.3, "solo":0.7}},
-    "sidewalk":   {"label":"Sidewalk Intercepts", "bias":{"multi":0.2, "solo":0.8}},
+    "email_list": {"label":"Email List", "yield":0.6, "bias":{"multi":0.5, "solo":0.5}},
+    "cold_dm":    {"label":"Cold DMs", "yield":0.4, "bias":{"multi":0.4, "solo":0.6}},
+    "forums":     {"label":"Industry Forums", "yield":0.5, "bias":{"multi":0.3, "solo":0.7}},
+    "sidewalk":   {"label":"Sidewalk Intercepts", "yield":0.3, "bias":{"multi":0.2, "solo":0.8}},
 }
 CHANNEL_ORDER = ["email_list","cold_dm","forums","sidewalk"]
 
@@ -236,12 +234,13 @@ def answers_for(p):
 def init_state():
     st.session_state.sim = {
         "started": False,
+        "start_jump": False,   # for reliable intro → target tab switch
         "tokens": 10,
         "booked": [],
         "interviews": {},  # pid -> {log:[{q,a}], step:int, finished:bool, asked:set, learnings:str}
         "coverage": {"channel_counts": {}},
         "flash_opened": [],
-        "flash_counts": {},   # pain -> count derived from flash openings
+        "flash_counts": {},   # pain -> count from flash openings
         "synthesis": None,
         "go_to_live": False,
         "go_to_score": False,
@@ -249,20 +248,33 @@ def init_state():
     }
 
 def sample_by_allocation(allocation):
-    draws = max(0, int(sum(allocation.values())))
-    if draws == 0: return []
+    """Channels matter:
+       - # booked = sum over tokens of Bernoulli(channel_yield)
+       - Segment chosen using channel bias weighted by tokens
+    """
+    # successes by yield
+    successes = 0
+    for ch, n in allocation.items():
+        y = CHANNELS[ch]["yield"]
+        for _ in range(int(n)):
+            if random.random() < y:
+                successes += 1
+    draws = max(1, min(8, successes))  # keep at least 1, cap at 8
+
+    # segment weights from bias
     seg_weight = {"solo":0.0,"multi":0.0}
     for ch,toks in allocation.items():
-        if toks<=0: continue
         for seg,w in CHANNELS[ch]["bias"].items():
             seg_weight[seg] += w * toks
     if seg_weight["solo"]==0 and seg_weight["multi"]==0:
         seg_weight = {"solo":1.0,"multi":1.0}
     total = seg_weight["solo"] + seg_weight["multi"]
     probs = {"solo": seg_weight["solo"]/total, "multi": seg_weight["multi"]/total}
-    pool = PERSONAS[:]  # do not mutate; seeded above
+
+    # choose personas by segment probability
+    pool = PERSONAS[:]
     chosen = []
-    for _ in range(min(8, draws)):
+    for _ in range(draws):
         seg_pick = random.choices(["solo","multi"], weights=[probs["solo"], probs["multi"]])[0]
         cand = [p for p in pool if p["ptype"]==seg_pick and p["pid"] not in chosen] or [p for p in pool if p["pid"] not in chosen]
         if not cand: break
@@ -276,11 +288,11 @@ def synthesis():
     S = st.session_state.sim
     counts, quotes = {}, {}
 
-    # Interviews: attribute to persona's primary pain (highest weight)
+    # Interviews
     for pid, rec in S["interviews"].items():
         p = rec["persona"]
         primary = max(p["pains"], key=lambda k: p["pains"][k])
-        counts[primary] = counts.get(primary, 0) + max(1, len(rec["log"])//2)  # weight by Qs asked
+        counts[primary] = counts.get(primary, 0) + max(1, len(rec["log"])//2)  # weight by depth
         for e in rec["log"][:2]:
             quotes.setdefault(primary, []).append(e["a"])
 
@@ -312,11 +324,11 @@ def decide_and_score(ph, ntp):
     largest_share = max(S["coverage"]["channel_counts"].values() or [0])/(sum(S["coverage"]["channel_counts"].values()) or 1)
     coverage = 1.0 if (channels_used>=3 and largest_share<=0.6) else 0.6
 
-    # Softer PS/Plan scoring: clarity & alignment (no forced words)
-    def clarity(s):  # length + structure proxy
+    # Softer PS/Plan scoring: clarity & alignment (no required words)
+    def clarity(s):
         words = len((s or "").split())
         return max(0.3, min(1.0, words/40.0))
-    def aligned(s):  # mentions any top pain label words
+    def aligned(s):
         txt = (s or "").lower()
         labels = [PAINS[k]["label"].lower() for k in syn["top"]]
         return 1.0 if any(lbl.split()[0] in txt for lbl in labels) else 0.6
@@ -335,11 +347,13 @@ def decide_and_score(ph, ntp):
     explanations = {
         "Interview Craft": "Based on number of meaningful turns; thoughtful follow-ons raise this.",
         "Coverage": "Diverse channels reduce sampling bias; aim for ≥3 and avoid one dominant source.",
-        "Signal Detection": "Whether your inferred top issue matches the emphasized market signal.",
+        "Signal Detection": f"Whether your inferred top issue matches the emphasized market signal. "
+                            f"Your top signal: **{PAINS.get(chosen_top, {'label':'—'}).get('label','—')}**; "
+                            f"Ground-truth emphasis: **{PAINS['cac_volatility']['label']}**.",
         "Problem Statement Quality": "Clarity and alignment with surfaced pains (no specific words required).",
         "Next Test Plan": "Clarity of steps and whether success criteria are explicit (metric/threshold).",
     }
-    return {"score":score,"components":components,"explanations":explanations,"chosen_top":chosen_top,"true_top":true_top}
+    return {"score":score,"components":components,"explanations":explanations}
 
 # ================== Streamlit app ==================
 st.set_page_config(page_title="Startup Simulation: Problem Discovery & Validation", page_icon="🧪", layout="wide")
@@ -349,25 +363,39 @@ S = st.session_state.sim
 st.title("Startup Simulation: Problem Discovery & Validation")
 tabs = st.tabs(["Intro","Target & Recruit","Live Interviews","Flash Bursts","Synthesis + Decide","Score"])
 
+# After tabs are created, honor any pending auto-switches
+if S.get("start_jump"):
+    components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]){t[1].click(); setTimeout(()=>t[1].click(),80);}</script>", height=0)
+    S["start_jump"]=False
+
 # ---- Intro ----
 with tabs[0]:
     st.subheader("Welcome")
     st.markdown("""
-**How it works:** You’ll practice the discovery loop — **target → recruit → interview → synthesize → decide**.  
-**Session length:** ~75–90 minutes (solo).  
-**Objective:** Ask better questions, detect real signals, and choose an evidence-based next test.
+**How the simulation works:** You’ll practice the discovery loop — **target → recruit → interview → synthesize → decide**.
+
+**Time:** ~75–90 minutes (solo, one sitting).
+
+**What you’ll do:**
+1) Pick a target and allocate **10 effort tokens** across channels.  
+2) Conduct short **live interviews** (4–10 questions each).  
+3) Open **Flash Bursts** to broaden coverage.  
+4) Run **Synthesis** and draft a **Problem Hypothesis** and **Next Test Plan**.  
+5) Get a **Score** and a short debrief.
+
+**Objectives:** Improve interview craft, detect real signals, and plan an evidence-based next step.
 """)
     if not S["started"]:
         if st.button("Start Simulation"):
             S["started"] = True
-            # Reliable auto-advance:
-            components.html(
-                "<script>setTimeout(()=>{const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]) t[1].click();},50)</script>",
-                height=0
-            )
+            S["start_jump"] = True
+            # double nudge for reliability
+            components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]){t[1].click(); setTimeout(()=>t[1].click(),80);}</script>", height=0)
             st.rerun()
     else:
-        st.success("Simulation started — move to Target & Recruit.")
+        st.success("Simulation started — moving you to Target & Recruit…")
+        S["start_jump"] = True
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]){t[1].click(); setTimeout(()=>t[1].click(),80);}</script>", height=0)
 
 # ---- Target & Recruit ----
 with tabs[1]:
@@ -394,7 +422,7 @@ Each channel differs in **yield**, **bias**, and **speed**.
         if st.button("Book Personas", disabled=(total!=10)):
             S["tokens"] = max(0, S["tokens"]-10)
             booked = sample_by_allocation(alloc)
-            S["booked"]=booked
+            S["booked"] = booked
             for ch,n in alloc.items():
                 S["coverage"]["channel_counts"][ch]=S["coverage"]["channel_counts"].get(ch,0)+n
             for pid in booked:
@@ -407,13 +435,12 @@ Each channel differs in **yield**, **bias**, and **speed**.
 # ---- Live Interviews ----
 with tabs[2]:
     if S.get("go_to_live"):
-        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[2]) t[2].click();</script>", height=0)
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[2]){t[2].click(); setTimeout(()=>t[2].click(),60);}</script>", height=0)
         S["go_to_live"]=False
     st.subheader("Live Interviews")
     if not S["booked"]:
         st.info("Book personas in **Target & Recruit** first.")
     else:
-        # Stable list (built once from PERSONAS by id)
         booked_cards = [get_persona(pid) for pid in S["booked"]]
         with st.expander(f"Booked Personas ({len(booked_cards)})", expanded=True):
             for p in booked_cards:
@@ -435,7 +462,6 @@ with tabs[2]:
         else:
             st.caption("_No questions yet. Pick a conversation starter below._")
 
-        # Build options pool; already-asked ones disappear
         answered = rec["asked"]
         if not rec["finished"]:
             st.markdown("#### Ask a question")
@@ -484,7 +510,6 @@ with tabs[3]:
             if title not in S["flash_opened"]:
                 S["flash_opened"].append(title)
                 f = next(x for x in FLASH_ITEMS if x["title"]==title)
-                # count toward pain signals
                 key = f["primary_pain"]
                 S["flash_counts"][key] = S["flash_counts"].get(key,0)+1
         st.rerun()
@@ -523,19 +548,32 @@ with tabs[4]:
 
     st.markdown("---")
     st.subheader("Decide & Draft")
+
+    # Examples (neutral domain) restored
+    with st.expander("See examples (for structure only)"):
+        st.markdown("**Problem Hypothesis example**  \n"
+                    "_Operations managers in mid-size logistics firms, when weather disrupts shipments, "
+                    "struggle with **manual rescheduling**, causing missed SLAs and overtime costs. "
+                    "They currently juggle spreadsheets and phone calls._")
+        st.markdown("**Next Test Plan example**  \n"
+                    "_Assumption: managers will adopt a daily ETA risk alert if it cuts rework.  \n"
+                    "Method: concierge alerts for 8 customers over 3 weeks.  \n"
+                    "Metric: rework hours/week and % on-time.  \n"
+                    "Success threshold: ≥30% rework reduction and ≥5/8 ask to continue._")
+
     S["drafts"]["ph"]=st.text_area("Your Problem Hypothesis", value=S["drafts"]["ph"])
     S["drafts"]["ntp"]=st.text_area("Your Next Test Plan", value=S["drafts"]["ntp"])
     if st.button("Submit"):
         if not S.get("synthesis"): synthesis()
         S["go_to_score"]=True
-        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[5]) t[5].click();</script>", height=0)
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[5]){t[5].click(); setTimeout(()=>t[5].click(),80);}</script>", height=0)
         st.rerun()
 
 # ---- Score ----
 with tabs[5]:
     st.subheader("Score")
     if S.get("go_to_score"):
-        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[5]) t[5].click();</script>", height=0)
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[5]){t[5].click(); setTimeout(()=>t[5].click(),60);}</script>", height=0)
         S["go_to_score"]=False
     if st.button("Compute Score"):
         res = decide_and_score(S["drafts"].get("ph",""), S["drafts"].get("ntp",""))
@@ -545,7 +583,7 @@ with tabs[5]:
         if _HAS_MPL:
             angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
             angles += angles[:1]; values_plot = values + values[:1]
-            fig = plt.figure(figsize=(4,4))  # ~half-size
+            fig = plt.figure(figsize=(3,3))  # smaller
             ax = plt.subplot(111, polar=True)
             ax.plot(angles, values_plot, linewidth=2)
             ax.fill(angles, values_plot, alpha=0.25)
@@ -555,8 +593,6 @@ with tabs[5]:
             st.table({"Component":labels,"Score (0–1)":values})
 
         st.metric("Total Score", f"{res['score']}/100")
-        st.markdown(f"**Your top signal:** {PAINS.get(res['chosen_top'],{'label':'—'}).get('label','—')}  "
-                    f"| **Ground-truth emphasis:** {PAINS['cac_volatility']['label']}")
 
         st.markdown("### Component breakdown")
         for k,v in res["components"].items():
@@ -564,12 +600,3 @@ with tabs[5]:
             verdict = "Excellent" if pct>=80 else "Good" if pct>=60 else "Mixed" if pct>=40 else "Needs work"
             why = res["explanations"][k]
             st.write(f"- **{k}:** {pct}/100 — {verdict}. {why}")
-
-        st.markdown("### Key Lessons")
-        st.markdown("""
-- **When interviewing,** favor open, past-behavior prompts; avoid yes/no and solution-pitching.
-- **When recruiting,** balance channels to reduce bias; aim for at least three distinct sources.
-- **When synthesizing,** combine interview and flash signals; look for repeated pains, not just loud anecdotes.
-- **When drafting hypotheses,** ensure clarity and alignment with surfaced pains (who, pain, consequence).
-- **When planning next tests,** define the method and include a clear metric or success threshold.
-""")
