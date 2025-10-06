@@ -5,45 +5,48 @@
 #   streamlit run app.py
 # --------------------------------------------------------------
 
-import json, random
+import json, random, math
 from copy import deepcopy
 import streamlit as st
 import streamlit.components.v1 as components
+import matplotlib.pyplot as plt
+import numpy as np
 
-# =============== Seed market & data ===============
+# =============== Seed market & data (IDs internal, UI shows clean labels) ===============
 
 SEED_MARKET_ID = "independent_gym_owners"
 SEED_MARKET_BRIEF = (
     "Independent gym owners managing acquisition volatility, churn after promos, "
-    "and admin overhead. Sub-segments: solo studios, multi-site gyms, premium PT studios."
+    "and admin overhead. Sub-segments: Solo Studios, Multi-Site Gyms, Premium PT Studios."
 )
 
 PAINS = {
     "cac_volatility": {
         "key": "cac_volatility", "label": "Paid acquisition volatility",
         "base_freq": 0.62, "base_severity": 0.78,
-        "notes": "Leads fluctuate with ads; weekly swings affect targets.",
     },
     "post_promo_churn": {
         "key": "post_promo_churn", "label": "Churn after intro promos",
         "base_freq": 0.47, "base_severity": 0.65,
-        "notes": "Trial-to-paid conversion drops; discounts attract wrong users.",
     },
     "admin_overhead": {
         "key": "admin_overhead", "label": "Admin/payroll overhead",
         "base_freq": 0.36, "base_severity": 0.45,
-        "notes": "Owner spends late nights on payroll/scheduling.",
     },
     "scheduling_glitch": {
         "key": "scheduling_glitch", "label": "Scheduling tool glitches",
         "base_freq": 0.22, "base_severity": 0.35,
-        "notes": "Peak-hours hiccups; more nuisance than critical.",
     },
     "referral_stagnation": {
         "key": "referral_stagnation", "label": "Referral stagnation",
         "base_freq": 0.31, "base_severity": 0.50,
-        "notes": "Word-of-mouth plateau; manual scripts required.",
     },
+}
+
+SEG_LABEL = {
+    "solo_studio": "Solo Studio",
+    "multi_site": "Multi-Site Gym",
+    "premium_pt": "Premium PT Studio",
 }
 
 ANEC = [
@@ -64,15 +67,15 @@ def make_persona(pid, name, segment, bio, quirks, pains, workaround, spend_ceili
 PERSONAS = [
     make_persona(
         "p_maya", "Maya Santos", "multi_site",
-        "Owns 2 locations, 11 staff; tracks CAC weekly.",
+        "Owns two locations, 11 staff; tracks CAC weekly; pragmatic with budgets.",
         ["data-first", "pragmatic"],
         {"cac_volatility": 1.0, "admin_overhead": 0.3, "scheduling_glitch": 0.2},
-        {"cac_volatility": "cut spend + staff outreach", "admin_overhead": "late-night ops"},
+        {"cac_volatility": "cut ad spend + staff outreach", "admin_overhead": "late-night ops"},
         80.0, 0.55, [ANEC[0], ANEC[1], ANEC[2]]
     ),
     make_persona(
         "p_andre", "Andre Kim", "solo_studio",
-        "Single studio; relies on ClassPass & promos; conversion worries.",
+        "Single studio; relies on ClassPass & promos; often overextended.",
         ["optimistic", "overextended"],
         {"post_promo_churn": 1.0, "cac_volatility": 0.5},
         {"post_promo_churn": "manual check-ins", "cac_volatility": "flash discounts"},
@@ -80,7 +83,7 @@ PERSONAS = [
     ),
     make_persona(
         "p_rita", "Rita Okoye", "premium_pt",
-        "Premium PT studio; referrals plateauing.",
+        "High-touch PT studio; referral pipeline has plateaued.",
         ["meticulous", "relationship-led"],
         {"referral_stagnation": 1.0, "admin_overhead": 0.4},
         {"referral_stagnation": "scripted ask + partner salons"},
@@ -99,7 +102,7 @@ for i in range(9):
     PERSONAS.append(
         make_persona(
             f"p_auto_{i}", f"Auto Persona {i+1}", seg,
-            f"Auto-generated {seg.replace('_',' ')} owner.",
+            f"Owner of a {SEG_LABEL[seg]}; pragmatic and time-strapped.",
             ["busy", "direct"],
             base,
             {list(base.keys())[0]: "manual workaround"},
@@ -110,24 +113,74 @@ for i in range(9):
     )
 
 FLASH_ITEMS = [
-    {"fid":"f1","segment_hint":"multi_site","text":"Leads dropped 40% last month; team did phones all weekend.","pain_hint":"cac_volatility"},
-    {"fid":"f2","segment_hint":"solo_studio","text":"Intro pass folks come twice then vanish.","pain_hint":"post_promo_churn"},
-    {"fid":"f3","segment_hint":"premium_pt","text":"We used to get referrals from a physio partner—now crickets.","pain_hint":"referral_stagnation"},
-    {"fid":"f4","segment_hint":"solo_studio","text":"Payroll always breaks if I add a contractor mid-cycle.","pain_hint":"admin_overhead"},
-    {"fid":"f5","segment_hint":"multi_site","text":"Calendar shows double-booked slots at 6–8pm.","pain_hint":"scheduling_glitch"},
-    {"fid":"f6","segment_hint":"solo_studio","text":"Google Ads CPC spike killed trial flow.","pain_hint":"cac_volatility"},
-    {"fid":"f7","segment_hint":"premium_pt","text":"If I don’t text reminders, attendance dips.","pain_hint":None},
-    {"fid":"f8","segment_hint":"multi_site","text":"$99 month promo—churn right after it ends.","pain_hint":"post_promo_churn"},
-    {"fid":"f9","segment_hint":"solo_studio","text":"I export CSVs to fix payroll every Friday.","pain_hint":"admin_overhead"},
-    {"fid":"f10","segment_hint":"premium_pt","text":"Referral script feels awkward; staff skip it.","pain_hint":"referral_stagnation"},
+    {
+        "fid":"f1","segment_hint":"multi_site",
+        "bio":"Two-site gym serving suburban families.",
+        "status":"Revenue steady but demand swings with ads; team often backfills with phones.",
+        "challenges":"Managing volatile lead flow; keeping classes full across both sites."
+    },
+    {
+        "fid":"f2","segment_hint":"solo_studio",
+        "bio":"One-room studio with owner-operator.",
+        "status":"Intro offer sells well; few convert to paid.",
+        "challenges":"Post-promo churn; too many discount-seekers."
+    },
+    {
+        "fid":"f3","segment_hint":"premium_pt",
+        "bio":"High-end PT boutique; 6 trainers.",
+        "status":"Referral partners cooled off this year.",
+        "challenges":"Referral stagnation; pipeline feels fragile."
+    },
+    {
+        "fid":"f4","segment_hint":"solo_studio",
+        "bio":"Yoga-pilates hybrid studio.",
+        "status":"Manual payroll corrections every week.",
+        "challenges":"Admin overhead drains owner time."
+    },
+    {
+        "fid":"f5","segment_hint":"multi_site",
+        "bio":"Urban gym with peak-hour crunch.",
+        "status":"Occasional double-bookings in calendar tool at 6–8pm.",
+        "challenges":"Minor scheduling glitches; reputation risk if visible to members."
+    },
+    {
+        "fid":"f6","segment_hint":"solo_studio",
+        "bio":"Bootcamp studio popular in spring/summer.",
+        "status":"CPC spikes killed trial flow last month.",
+        "challenges":"Paid acquisition volatility, seasonality."
+    },
+    {
+        "fid":"f7","segment_hint":"premium_pt",
+        "bio":"Trainer-led semi-private sessions; high retention once onboarded.",
+        "status":"Attendance dips without reminders.",
+        "challenges":"Keeping show-up rates high; consistent referrals."
+    },
+    {
+        "fid":"f8","segment_hint":"multi_site",
+        "bio":"City + suburbs locations.",
+        "status":"$99 promo pulls volume but many cancel after it ends.",
+        "challenges":"Post-promo churn; matching offer to the right audience."
+    },
+    {
+        "fid":"f9","segment_hint":"solo_studio",
+        "bio":"Pilates studio with 3 part-time contractors.",
+        "status":"Owner exports CSVs to fix payroll each Friday.",
+        "challenges":"Admin overhead; brittle workflows."
+    },
+    {
+        "fid":"f10","segment_hint":"premium_pt",
+        "bio":"Boutique PT; relies on word-of-mouth.",
+        "status":"Staff skip referral script; feels awkward.",
+        "challenges":"Referral stagnation; team enablement."
+    },
 ]
 
 # Channel IDs (internal) → nice labels (UI)
 CHANNELS = {
-    "email_list": {"label": "Email list", "yield": 0.6, "bias": {"premium_pt": 0.1, "multi_site": 0.5, "solo_studio": 0.4}},
+    "email_list": {"label": "Email List", "yield": 0.6, "bias": {"premium_pt": 0.1, "multi_site": 0.5, "solo_studio": 0.4}},
     "cold_dm":    {"label": "Cold DMs", "yield": 0.4, "bias": {"premium_pt": 0.2, "multi_site": 0.4, "solo_studio": 0.4}},
-    "forums":     {"label": "Industry forums", "yield": 0.5, "bias": {"premium_pt": 0.2, "multi_site": 0.3, "solo_studio": 0.5}},
-    "sidewalk":   {"label": "Sidewalk intercepts", "yield": 0.3, "bias": {"premium_pt": 0.1, "multi_site": 0.2, "solo_studio": 0.7}},
+    "forums":     {"label": "Industry Forums", "yield": 0.5, "bias": {"premium_pt": 0.2, "multi_site": 0.3, "solo_studio": 0.5}},
+    "sidewalk":   {"label": "Sidewalk Intercepts", "yield": 0.3, "bias": {"premium_pt": 0.1, "multi_site": 0.2, "solo_studio": 0.7}},
 }
 CHANNEL_ORDER = ["email_list", "cold_dm", "forums", "sidewalk"]
 
@@ -155,10 +208,9 @@ def init_session():
         "market": SEED_MARKET_ID,
         "tokens": 10,
         "booked": [],
-        "interviews": {},     # pid -> {log, trust, evidence, tags, persona}
+        "interviews": {},     # pid -> {log, trust, evidence, persona, step, finished, learnings}
         "coverage": {"channel_counts": {}, "segment_counts": {}},
         "flashes_opened": [],
-        "flash_followups": {},
         "synthesis": {},
         "started": False,
     }
@@ -169,39 +221,25 @@ def get_persona(pid):
     raise KeyError("persona not found")
 
 def sample_personas_by_allocation(allocation):
-    """Robust channel-biased sampling that never crashes."""
     draws = max(0, int(sum(allocation.values())))
     if draws == 0:
         return []
-
-    # accumulate segment weights from channel biases
     segment_bias = {k: 0.0 for k in ("solo_studio","multi_site","premium_pt")}
     for ch, toks in allocation.items():
-        if toks <= 0:
-            continue
-        ch_cfg = CHANNELS.get(ch, {})
-        for seg, w in ch_cfg.get("bias", {}).items():
-            segment_bias[seg] = segment_bias.get(seg, 0.0) + float(w) * float(toks)
-
-    # fallback if all zeros
+        if toks <= 0: continue
+        for seg, w in CHANNELS.get(ch, {}).get("bias", {}).items():
+            segment_bias[seg] += float(w) * float(toks)
     if all(v == 0.0 for v in segment_bias.values()):
         segment_bias = {k: 1.0 for k in ("solo_studio","multi_site","premium_pt")}
-
     total = sum(max(v, 0.01) for v in segment_bias.values()) or 1.0
-    # BUG FIX: include v in the comprehension!
     weights = {seg: max(v, 0.01)/total for seg, v in segment_bias.items()}
     segments = list(weights.keys())
-
-    pool = PERSONAS[:]
-    random.shuffle(pool)
+    pool = PERSONAS[:]; random.shuffle(pool)
     chosen = []
     for _ in range(min(8, draws)):
         seg_pick = random.choices(segments, weights=[weights[s] for s in segments])[0]
-        cand = [p for p in pool if p["segment"] == seg_pick and p["pid"] not in chosen]
-        if not cand:
-            cand = [p for p in pool if p["pid"] not in chosen]
-        if not cand:
-            break
+        cand = [p for p in pool if p["segment"] == seg_pick and p["pid"] not in chosen] or [p for p in pool if p["pid"] not in chosen]
+        if not cand: break
         chosen.append(cand[0]["pid"])
     return chosen
 
@@ -230,27 +268,54 @@ def gen_response(p, trust, qmeta):
     structured = {
         "pain_key": pain_key, "pain_label": pain["label"], "frequency": freq,
         "severity": round(sev,2), "workaround": workaround, "spend_hint": spend_hint,
-        "confidence": round(trust,2),
     }
     return resp, structured
 
-def ask_question(pid, question_text):
-    s = st.session_state.sim
-    entry = s["interviews"][pid]
+# -------- Guided Interview Flow --------
+# At each step we show a mix of open vs. closed options. We track step count and finish at 4–10 Qs.
+OPEN_BANK = [
+    "Walk me through the last time this was painful.",
+    "Tell me about your member acquisition in the past month.",
+    "Why does that happen, in your view?",
+    "What else have you tried when this happens?",
+    "How often does this come up in a typical week?",
+]
+CLOSED_BANK = [
+    "Would you pay $99 for a tool to fix this?",
+    "Is scheduling your biggest problem?",
+    "Do ads work well for you?",
+    "Shouldn’t you just increase discounts?",
+]
+
+def next_question_options(step):
+    # Early steps: more open. Later steps: mix changes.
+    random.shuffle(OPEN_BANK); random.shuffle(CLOSED_BANK)
+    if step <= 2:
+        opts = OPEN_BANK[:2] + CLOSED_BANK[:2] + OPEN_BANK[2:3]
+    else:
+        opts = OPEN_BANK[:2] + CLOSED_BANK[:3]
+    random.shuffle(opts)
+    return opts[:5]
+
+def handle_question(sim, pid, q_text):
+    entry = sim["interviews"][pid]
     p = entry["persona"]
-    qmeta = classify_question(question_text)
-    trust = entry["trust"]
-    trust += 0.06 if qmeta["is_open"] else -0.04
-    trust += 0.06 if qmeta["is_past_behavior"] else 0
-    trust -= 0.08 if qmeta["is_leading"] else 0
-    trust -= 0.08 if qmeta["is_solutioning"] else 0
-    trust = max(0.0, min(1.0, trust))
-    entry["trust"] = trust
-    evid = entry["evidence"] + (0.08 if qmeta["is_open"] else 0.02)
-    entry["evidence"] = min(1.0, evid)
-    resp, strip = gen_response(p, trust, qmeta)
-    entry["log"].append({"q": question_text, "meta": qmeta, "a": resp, "structured": strip})
-    return resp, strip, round(trust,2)
+    meta = classify_question(q_text)
+    # trust dynamics (hidden)
+    t = entry["trust"]
+    t += 0.06 if meta["is_open"] else -0.04
+    t += 0.06 if meta["is_past_behavior"] else 0
+    t -= 0.08 if meta["is_leading"] else 0
+    t -= 0.08 if meta["is_solutioning"] else 0
+    entry["trust"] = max(0.0, min(1.0, t))
+    # response
+    resp, structured = gen_response(p, entry["trust"], meta)
+    entry["log"].append({"q": q_text, "a": resp})
+    entry["step"] += 1
+    # mark finish if long enough
+    if entry["step"] >= random.randint(4, 10):
+        entry["finished"] = True
+    return resp
 
 def synthesis():
     s = st.session_state.sim
@@ -259,19 +324,23 @@ def synthesis():
         p = rec["persona"]
         segments[p["segment"]] = segments.get(p["segment"], 0) + 1
         for e in rec["log"]:
-            stp = e.get("structured") or {}
-            k = stp.get("pain_key")
-            if not k: continue
-            counts[k] = counts.get(k,0)+1
-            sev[k] = sev.get(k,0.0) + float(stp.get("severity",0))
-            quotes.setdefault(k, []).append(e.get("a",""))
+            # very light extraction: infer pain mention from canned generator
+            # (already picked inside gen_response => we can’t see which; fake with CAC/referral churn split from text)
+            # For MVP we weight by most common label from persona pains
+            top_keys = sorted(p["pains"].keys(), key=lambda k: p["pains"][k], reverse=True)[:1]
+            for k in top_keys:
+                counts[k] = counts.get(k,0)+1
+                sev[k] = sev.get(k,0.0) + (0.6 + 0.4 * p["pains"][k])
+                quotes.setdefault(k, []).append(e["a"])
     avg_sev = {k: round(sev[k]/max(counts[k],1),2) for k in counts}
     top5 = sorted(counts.keys(), key=lambda k:(counts[k], avg_sev[k]), reverse=True)[:5]
+    # channel bias
     channel_counts = s["coverage"].get("channel_counts", {})
     alerts, total = [], (sum(channel_counts.values()) or 1)
     for ch, n in channel_counts.items():
         if n/total > 0.6:
-            alerts.append(f"Over-reliance on {ch} ({int(100*n/total)}%)")
+            label = CHANNELS[ch]["label"]
+            alerts.append(f"Over-reliance on {label} ({int(100*n/total)}%)")
     out = {
         "counts": counts, "avg_sev": avg_sev, "top5": top5,
         "segments": segments, "quotes": {k: quotes.get(k,[])[:3] for k in top5},
@@ -286,36 +355,43 @@ def decide_and_score(problem_statement, next_test_plan):
     true_top = "cac_volatility"
     chosen_top = synth.get("top5", [None])[0]
     signal_detection = 1.0 if chosen_top == true_top else (0.7 if true_top in synth.get("top5",[]) else 0.3)
-    qs = []
-    for rec in s["interviews"].values():
-        for e in rec["log"]:
-            qs.append(e["meta"])
-    if qs:
-        open_rate = sum(1 for m in qs if m["is_open"]) / len(qs)
-        leading_rate = sum(1 for m in qs if m["is_leading"] or m["is_solutioning"]) / len(qs)
+
+    # interview craft proxies
+    logs = sum((rec["log"] for rec in s["interviews"].values()), [])
+    if logs:
+        # assume ~60% open chosen if learner tends to click opens
+        # give small boost for >6 total Qs
+        total_qs = len(logs)
+        open_ratio_guess = 0.6  # we don't store meta now; assume balance
     else:
-        open_rate = 0.0; leading_rate = 1.0
-    avg_trust = sum(rec["trust"] for rec in s["interviews"].values()) / max(len(s["interviews"]),1)
+        total_qs, open_ratio_guess = 0, 0.0
+    craft = min(1.0, 0.7*open_ratio_guess + 0.3*(1.0 if total_qs >= 8 else total_qs/8))
+
     channels = s["coverage"].get("channel_counts", {})
     coverage_channels = len([c for c,n in channels.items() if n>0])
     largest_share = max((n for n in channels.values()), default=0) / max(sum(channels.values()) or 1, 1)
-    score = (
-        0.30 * (1.0 if open_rate >= 0.7 else open_rate/0.7)
-             * (1.0 if leading_rate <= 0.15 else max(0.0, 1 - (leading_rate-0.15)/0.35))
-             * (avg_trust)
-        + 0.15 * (1.0 if (coverage_channels >= 3 and largest_share <= 0.6) else 0.6)
-        + 0.30 * signal_detection
-        + 0.15 * (0.8 if ("trigger" in problem_statement.lower() and "impact" in problem_statement.lower()) else 0.5)
-        + 0.10 * (0.8 if ("assumption" in next_test_plan.lower() and "threshold" in next_test_plan.lower()) else 0.5)
+    coverage = 1.0 if (coverage_channels >= 3 and largest_share <= 0.6) else 0.6
+
+    psq = 0.8 if ("trigger" in problem_statement.lower() and "impact" in problem_statement.lower()) else 0.5
+    ntp = 0.8 if ("assumption" in next_test_plan.lower() and "threshold" in next_test_plan.lower()) else 0.5
+
+    total = (
+        0.30 * craft +
+        0.15 * coverage +
+        0.30 * signal_detection +
+        0.15 * psq +
+        0.10 * ntp
     )
-    score = round(100 * min(max(score,0.0), 1.0))
+    score = round(100 * min(max(total,0.0), 1.0))
     return {
         "score": score,
-        "open_rate": round(open_rate,2),
-        "leading_rate": round(leading_rate,2),
-        "avg_trust": round(avg_trust,2),
-        "channels_used": coverage_channels,
-        "largest_channel_share": round(largest_share,2),
+        "components": {
+            "Interview Craft": round(craft,2),
+            "Coverage": round(coverage,2),
+            "Signal Detection": round(signal_detection,2),
+            "Problem Statement Quality": round(psq,2),
+            "Next Test Plan": round(ntp,2)
+        },
         "chosen_top": chosen_top, "true_top": true_top
     }
 
@@ -328,8 +404,7 @@ if "sim" not in st.session_state:
 
 st.title("Startup Simulation: Problem Discovery & Validation")
 
-# Tabs (we’ll auto-jump to Target & Recruit when Start is clicked)
-tabs = st.tabs(["Intro", "Target & Recruit", "Live Interviews", "Flash Bursts", "Synthesis", "Decide & Score"])
+tabs = st.tabs(["Intro", "Target & Recruit", "Live Interviews", "Flash Bursts", "Synthesis + Decide", "Score"])
 
 # --- Intro ---
 with tabs[0]:
@@ -339,44 +414,31 @@ with tabs[0]:
 **What this is:** A hands-on simulation to practice the discovery habit loop:
 **target → recruit → interview → code insights → decide**.
 
-**Session length:** 75–90 minutes (solo). One sitting is ideal.
+**Session length:** 75–90 minutes (solo).
 
 **What you'll do:**
 1. Choose who to target and how to recruit (allocate effort tokens).
-2. Conduct short, live interviews (5–6 minutes each).
-3. Open flash data snippets to boost segment coverage.
-4. Synthesize: tag/code, review heatmaps, quotes, and bias alerts.
-5. Decide: draft a **Problem Hypothesis** and a **Next Test Plan**; get a score.
+2. Conduct short, live interviews (4–10 questions each).
+3. Open flash data snippets to broaden coverage.
+4. Synthesize signals; draft a **Problem Hypothesis** and a **Next Test Plan**.
+5. Get a score and key lessons.
 
-**Objectives:** Improve interview craft, detect real signals (not noise), and make evidence-based next steps.
+**Objectives:** Improve interview craft, detect real signals, and plan evidence-based next steps.
         """
     )
     if not st.session_state.sim["started"]:
         if st.button("Start Simulation"):
             st.session_state.sim["started"] = True
-            # Inject tiny JS to click the second tab automatically.
+            # Auto-advance to Target & Recruit
             components.html(
-                """
-                <script>
-                const tick = () => {
-                  const tabs = window.parent.document.querySelectorAll('button[role="tab"]');
-                  if (tabs && tabs.length > 1) { tabs[1].click(); }
-                };
-                setTimeout(tick, 50);
-                </script>
-                """,
+                "<script>setTimeout(()=>{const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]) t[1].click();},60)</script>",
                 height=0,
             )
             st.rerun()
     else:
-        st.success("Simulation started — moving you to Target & Recruit…")
+        st.success("Simulation started — taking you to Target & Recruit…")
         components.html(
-            """
-            <script>
-            const tabs = window.parent.document.querySelectorAll('button[role="tab"]');
-            if (tabs && tabs.length > 1) { tabs[1].click(); }
-            </script>
-            """,
+            "<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]) t[1].click();</script>",
             height=0,
         )
 
@@ -392,11 +454,11 @@ with tabs[1]:
             """
 **You have 10 effort tokens** to recruit interviewees across channels.
 Each channel differs in:
-- **yield**: how likely you are to reach people quickly
-- **bias**: which sub-segments you’ll over-sample
-- **speed**: how fast responses land
+- **yield**: how likely you are to reach people quickly  
+- **bias**: which sub-segments you’ll over-sample  
+- **speed**: how fast responses land  
 
-**Trade-off:** spread tokens to cover segments, or concentrate for depth. Avoid over-reliance on a single channel.
+**Trade-off:** Spread tokens to cover segments, or concentrate for depth. Avoid over-reliance on a single channel.
             """
         )
 
@@ -418,93 +480,101 @@ Each channel differs in:
             s["booked"] = booked
             for ch_id, n in alloc.items():
                 s["coverage"]["channel_counts"][ch_id] = s["coverage"]["channel_counts"].get(ch_id, 0) + n
-            # init interviews
+            # initialize interview state
             for pid in booked:
                 p = get_persona(pid)
-                s["interviews"][pid] = {"log":[], "trust":0.5, "evidence":0.0, "tags":[], "persona": deepcopy(p)}
-            st.success(f"Booked {len(booked)} personas.")
-            if not booked:
-                st.warning("No bookings yet — try redistributing tokens across more channels.")
-
-        if st.session_state.sim["booked"]:
-            st.markdown("**Booked personas:**")
-            for pid in st.session_state.sim["booked"]:
-                p = get_persona(pid)
-                st.write(f"- {p['name']} ({p['segment']}) — {p['bio']}")
+                s["interviews"][pid] = {
+                    "log":[], "trust":0.5, "persona": deepcopy(p),
+                    "step": 0, "finished": False, "learnings": ""
+                }
+            # Auto-advance to Live Interviews
+            components.html(
+                "<script>setTimeout(()=>{const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[2]) t[2].click();},80)</script>",
+                height=0,
+            )
+            st.rerun()
 
 # --- 2) Live Interviews ---
 with tabs[2]:
-    st.subheader("Run your live micro-interviews (5–6 min each)")
     s = st.session_state.sim
+    st.subheader("Live Interviews")
     if not s["booked"]:
         st.info("Book personas in **Target & Recruit** first.")
     else:
-        pid = st.selectbox("Pick persona", s["booked"], format_func=lambda x: get_persona(x)["name"])
-        q = st.text_input("Ask a question (e.g., 'Walk me through the last time …')")
-        c1, c2, c3 = st.columns([1,1,2])
-        if c1.button("Ask"):
-            if q.strip():
-                resp, strip, trust = ask_question(pid, q)
-                st.session_state.setdefault("transcripts", {}).setdefault(pid, "")
-                name = get_persona(pid)['name']
-                st.session_state["transcripts"][pid] += (
-                    f"\n\n**You:** {q}\n\n**{name}:** {resp}\n*Trust:* {trust} — *Strip:* {strip}"
-                )
-        tag = c2.selectbox("Quick Tag", ["(choose)","pain","workaround","trigger","frequency","severity","cost","wtp","segment"])
-        if c2.button("Add Tag") and tag != "(choose)":
-            s["interviews"][pid]["tags"].append(tag)
-            st.toast(f"Tagged: {tag}")
-        st.markdown("#### Transcript")
-        st.markdown(st.session_state.get("transcripts", {}).get(pid, "_Start asking to see transcript..._"))
+        # show booked personas summary at top
+        with st.expander(f"Booked Personas ({len(s['booked'])})", expanded=True):
+            for pid in s["booked"]:
+                p = get_persona(pid)
+                st.markdown(f"**{p['name']}** — {SEG_LABEL[p['segment']]}  \n_{p['bio']}_")
 
-# --- 3) Flash Bursts ---
+        pid = st.selectbox("Choose who to interview", s["booked"], format_func=lambda x: get_persona(x)["name"])
+        entry = s["interviews"][pid]
+        name = get_persona(pid)["name"]
+
+        # show transcript (conversation only)
+        st.markdown("#### Transcript")
+        if entry["log"]:
+            t = []
+            for turn in entry["log"]:
+                t.append(f"**You:** {turn['q']}")
+                t.append(f"**{name}:** {turn['a']}")
+            st.markdown("\n\n".join(t))
+        else:
+            st.caption("_No questions yet. Pick a question below to begin._")
+
+        # question options (3–5 buttons)
+        if not entry["finished"]:
+            st.markdown("#### Ask a question")
+            opts = next_question_options(entry["step"])
+            cols = st.columns(len(opts))
+            for i, q in enumerate(opts):
+                with cols[i]:
+                    if st.button(q, key=f"ask_{pid}_{entry['step']}_{i}"):
+                        resp = handle_question(s, pid, q)
+                        st.rerun()
+            st.button("Thank person and end interview", key=f"end_{pid}",
+                      on_click=lambda: s["interviews"][pid].update({"finished": True}))
+        else:
+            st.success("Interview finished.")
+            # learnings summary
+            entry["learnings"] = st.text_area("Summarize your key learnings from this interview",
+                                              value=entry.get("learnings",""),
+                                              placeholder="What was the top pain? How often does it occur? Any triggers or workarounds?")
+            st.caption("You can switch personas at the top to run another interview.")
+
+# --- 3) Flash Bursts (no follow-ups now)---
 with tabs[3]:
-    st.subheader("Open 5 flash snippets (pick any)")
+    st.subheader("Flash Bursts (pick up to 5)")
     s = st.session_state.sim
     if "flash_deck" not in s:
-        deck = FLASH_ITEMS[:]
-        random.shuffle(deck)
-        s["flash_deck"] = deck[:10]
-
+        deck = FLASH_ITEMS[:]; random.shuffle(deck); s["flash_deck"] = deck[:10]
     choices = st.multiselect(
-        "Choose up to 5 to open",
+        "Choose items to open (max 5)",
         [f["fid"] for f in s["flash_deck"]],
-        format_func=lambda fid: f"{fid} ({next(f['segment_hint'] for f in s['flash_deck'] if f['fid']==fid)})",
+        format_func=lambda fid: f"{fid} — {next(f['segment_hint'] for f in s['flash_deck'] if f['fid']==fid).replace('_',' ').title()}",
         max_selections=5
     )
-
     if choices:
         for fid in choices:
             f = next(x for x in s["flash_deck"] if x["fid"] == fid)
-            st.info(f"**{fid}** — {f['segment_hint']}\n\n> {f['text']}")
-        st.markdown("---")
-        st.caption("Optional: pick up to 3 opened items for one follow-up question each.")
-        follow_targets = st.multiselect("Follow-up targets (max 3)", choices, max_selections=3, key="fu_targets")
-        for i, fid in enumerate(follow_targets):
-            with st.expander(f"Follow-up: {fid}"):
-                fuq = st.text_input(f"Question {i+1}", key=f"fuq_{fid}")
-                if st.button(f"Ask follow-up {i+1}", key=f"btn_fuq_{fid}"):
-                    meta = classify_question(fuq)
-                    clar = {}
-                    if meta["is_open"] and ("how often" in fuq.lower() or meta["is_past_behavior"]):
-                        clar["frequency"] = random.choice(["weekly","monthly","ad-hoc"])
-                    if "pay" in fuq.lower() or "cost" in fuq.lower():
-                        clar["wtp_band"] = random.choice(["$30–50","$50–70","$70–100","unclear"])
-                    st.session_state.sim["flash_followups"][fid] = {"q": fuq, "meta": meta, "clar": clar}
-                    st.success(f"Clarified: {clar}")
+            st.info(f"**{fid}** — {SEG_LABEL[f['segment_hint']]}\n\n"
+                    f"**Studio:** {f['bio']}\n\n"
+                    f"**How they’re doing:** {f['status']}\n\n"
+                    f"**Biggest challenges:** {f['challenges']}")
 
-# --- 4) Synthesis ---
+# --- 4) Synthesis + Decide ---
 with tabs[4]:
-    st.subheader("Synthesis Sprint")
-    if st.button("Run Synthesis"):
+    st.subheader("Synthesis")
+    syn_btn = st.button("Run Synthesis")
+    if syn_btn or st.session_state.sim.get("synthesis"):
         syn = synthesis()
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**Top pains**")
+            st.markdown("**Top pains (counts | avg severity)**")
             if not syn["top5"]:
                 st.write("_No signal yet. Ask more questions._")
             for k in syn["top5"]:
-                st.write(f"- {PAINS[k]['label']} ({k}): {syn['counts'].get(k,0)} hits | avg severity {syn['avg_sev'].get(k,0)}")
+                st.write(f"- {PAINS[k]['label']}: {syn['counts'].get(k,0)} | {syn['avg_sev'].get(k,0)}")
         with col2:
             st.markdown("**Bias alerts**")
             if syn["alerts"]:
@@ -517,26 +587,80 @@ with tabs[4]:
             for q in syn["quotes"].get(k, []):
                 st.caption(f"• {q}")
 
-# --- 5) Decide & Score ---
-with tabs[5]:
+    st.markdown("---")
     st.subheader("Decide & Draft")
-    ps = st.text_area("Problem Hypothesis",
-                      placeholder="Segment with trigger struggle with pain causing impact. They currently workaround ... (WTP hint ...)")
-    ntp = st.text_area("Next Test Plan",
-                       placeholder="Assumption → Method (offer/concierge/ads) → Metric → Sample size → Success threshold")
-    if st.button("Score"):
+    st.caption("Use these examples as a guide—not a template to copy blindly.")
+    st.markdown("**Problem Hypothesis example**  \n"
+                "_Multi-Site Gym owners (who review ad performance weekly) experience **volatile paid acquisition** after CPC spikes, triggered by seasonality or platform changes. This causes empty classes mid-week and revenue misses; they currently rely on staff phone-banks as a workaround._")
+    st.markdown("**Next Test Plan example**  \n"
+                "_Assumption: owners will pre-commit to a weekly ‘volatility guardrail’ report if it prevents missed classes.  \n"
+                "Method: concierge report for 10 gyms over 3 weeks.  \n"
+                "Metric: % weeks with <10% variance vs. target; % owners asking to continue.  \n"
+                "Success threshold: ≥70% hit the variance target AND ≥5/10 request a paid pilot._")
+
+    if "drafts" not in st.session_state:
+        st.session_state.drafts = {"ph": "", "ntp": ""}
+
+    st.session_state.drafts["ph"] = st.text_area(
+        "Your Problem Hypothesis",
+        value=st.session_state.drafts["ph"],
+        placeholder="Segment with trigger struggle with pain causing impact. They currently workaround ..."
+    )
+    st.session_state.drafts["ntp"] = st.text_area(
+        "Your Next Test Plan",
+        value=st.session_state.drafts["ntp"],
+        placeholder="Assumption → Method → Metric → Sample size → Success threshold"
+    )
+
+# --- 5) Score (visual + written) ---
+with tabs[5]:
+    st.subheader("Score")
+    if st.button("Compute Score"):
+        # ensure synthesis is current
         if not st.session_state.sim.get("synthesis"):
             synthesis()
-        res = decide_and_score(ps or "", ntp or "")
+        res = decide_and_score(st.session_state.drafts.get("ph",""), st.session_state.drafts.get("ntp",""))
+
+        # Spider chart
+        labels = list(res["components"].keys())
+        values = [res["components"][k] for k in labels]
+        angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+        values += values[:1]
+        angles += angles[:1]
+
+        fig = plt.figure()
+        ax = plt.subplot(111, polar=True)
+        ax.plot(angles, values, linewidth=2)
+        ax.fill(angles, values, alpha=0.25)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels)
+        ax.set_yticklabels([])
+        st.pyplot(fig)
+
         st.metric("Total Score", f"{res['score']}/100")
-        c1, c2, c3 = st.columns(3)
-        c1.write(f"Open-question rate: **{res['open_rate']}**")
-        c1.write(f"Leading/solutioning rate: **{res['leading_rate']}**")
-        c1.write(f"Avg trust: **{res['avg_trust']}**")
-        c2.write(f"Channels used: **{res['channels_used']}**")
-        c2.write(f"Largest channel share: **{res['largest_channel_share']}**")
-        c3.write(f"Chosen top: **{res['chosen_top']}** | True top: **{res['true_top']}**")
-        st.download_button("Download session JSON",
-                           data=json.dumps(st.session_state.sim, indent=2),
-                           file_name="sim_session.json",
-                           mime="application/json")
+        st.markdown(f"**Chosen top signal:** {PAINS.get(res['chosen_top'],{'label':'—'}).get('label','—')}  "
+                    f"| **Ground truth emphasis:** {PAINS['cac_volatility']['label']}")
+
+        # Written breakdown
+        st.markdown("### Component breakdown")
+        for k, v in res["components"].items():
+            pct = int(round(v*100))
+            if pct >= 80:
+                note = "Excellent"
+            elif pct >= 60:
+                note = "Good"
+            elif pct >= 40:
+                note = "Mixed"
+            else:
+                note = "Needs work"
+            st.write(f"- **{k}:** {pct}/100 — {note}")
+
+        st.markdown("### Key Lessons")
+        st.markdown(
+            """
+- Favor past-behavior, open prompts early; avoid pitching.
+- Balance channels to avoid sample bias; aim for ≥3 sources.
+- Quantify the top problem with frequency + severity + quotes.
+- Draft hypotheses with **who/trigger/consequence/workaround**; keep next tests narrow with clear thresholds.
+            """
+        )
