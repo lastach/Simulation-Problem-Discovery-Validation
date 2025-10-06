@@ -9,7 +9,7 @@ from copy import deepcopy
 import streamlit as st
 import streamlit.components.v1 as components
 
-# optional plotting (so the app won’t crash if matplotlib isn’t ready yet)
+# Optional plotting (app still loads if matplotlib isn't present yet)
 try:
     import matplotlib.pyplot as plt
     import numpy as np
@@ -17,124 +17,149 @@ try:
 except Exception:
     _HAS_MPL = False
 
+# Make persona sampling stable across reruns (prevents “changing” cards)
+random.seed(42)
+
 # ================== Market brief ==================
 SEED_MARKET_BRIEF = (
     "Independent gym owners managing acquisition volatility, churn after promos, "
-    "and admin overhead. Sub-segments used in this sim: Solo Studios and Multi-Site Gyms."
+    "and admin overhead. Sub-segments in this sim: Solo Studios and Multi-Site Gyms."
 )
 
+# pains (engine)
 PAINS = {
     "cac_volatility": {"label": "Paid acquisition volatility"},
     "post_promo_churn": {"label": "Churn after intro promos"},
-    "admin_overhead": {"label": "Admin/payroll overhead"},
+    "admin_overhead": {"label": "Admin and payroll overhead"},
     "scheduling_glitch": {"label": "Scheduling tool glitches"},
     "referral_stagnation": {"label": "Referral stagnation"},
 }
+
 SEG_LABEL = {"solo": "Solo Studio", "multi": "Multi-Site Gym"}
 
 # ================== Personas ==================
-def persona(pid, gym_name, owner, ptype, weekly_clients, staff_per, monthly_fee, known_for,
-            pains, workarounds, tell, anecdotes):
+def persona(pid, gym_name, owner, ptype, weekly_clients, staff_per, monthly_fee, known_for, pains, workarounds, tell, anecdotes):
     return {
-        "pid": pid, "gym_name": gym_name, "owner": owner, "ptype": ptype,
-        "weekly_clients": weekly_clients, "staff_per": staff_per,
-        "monthly_fee": monthly_fee, "known_for": known_for,
-        "pains": pains, "workarounds": workarounds, "tell_threshold": tell, "anecdotes": anecdotes
+        "pid": pid,
+        "gym_name": gym_name,
+        "owner": owner,
+        "ptype": ptype,  # "solo" | "multi"
+        "weekly_clients": weekly_clients,
+        "staff_per": staff_per,
+        "monthly_fee": monthly_fee,
+        "known_for": known_for,
+        "pains": pains,                 # weight map (0..1)
+        "workarounds": workarounds,     # dict per pain
+        "tell_threshold": tell,
+        "anecdotes": anecdotes,
     }
 
 def solo(budget=False, premium=False):
-    if budget:   return random.randint(120,200), random.randint(2,4), random.choice([35,39,45]), "Budget-friendly"
-    if premium:  return random.randint(160,240), random.randint(3,6), random.choice([99,119,129]), "Premium amenities"
-    return random.randint(140,220), random.randint(2,5), random.choice([55,69,79]), "Great community"
+    if budget:
+        return random.randint(120, 200), random.randint(2, 4), random.choice([35, 39, 45]), "Budget-friendly"
+    if premium:
+        return random.randint(160, 240), random.randint(3, 6), random.choice([99, 119, 129]), "Premium amenities"
+    return random.randint(140, 220), random.randint(2, 5), random.choice([55, 69, 79]), "Great community"
 
 def multi(budget=False, premium=False):
-    if budget:   return random.randint(250,380), random.randint(8,12), random.choice([49,59,69]), "Value for money"
-    if premium:  return random.randint(320,520), random.randint(12,18), random.choice([129,149,169]), "Premium programs"
-    return random.randint(280,460), random.randint(10,16), random.choice([79,99,109]), "Well-rounded offering"
+    if budget:
+        return random.randint(250, 380), random.randint(8, 12), random.choice([49, 59, 69]), "Value for money"
+    if premium:
+        return random.randint(320, 520), random.randint(12, 18), random.choice([129, 149, 169]), "Premium programs"
+    return random.randint(280, 460), random.randint(10, 16), random.choice([79, 99, 109]), "Well-rounded offering"
 
 ANEC = [
-    "Two weeks ago our ads spiked in cost; trial sign-ups halved.",
+    "Two weeks ago ads spiked; trial sign-ups halved.",
     "We phone bank to fill empty classes when campaigns dip.",
-    "Payroll takes longer than planned—CSV exports every Friday.",
+    "Payroll takes longer than planned—CSV exports each Friday.",
     "Intro offer folks vanish unless we personally check in.",
     "Calendar double-books at peak once in a while.",
 ]
 
-# Build the roster ONCE; we’ll freeze it in session_state to prevent changes on rerun.
-def build_personas():
-    P = []
-    # 8 solo
-    P += [
-        persona("p1","Sunrise Yoga","Lena Park","solo", *solo(budget=True),
-                {"cac_volatility":0.5,"post_promo_churn":0.7,"admin_overhead":0.4},
-                {"post_promo_churn":"owner texts trial members"}, 0.50,[ANEC[3],ANEC[2]]),
-        persona("p2","Steel City Strength","Marco Diaz","solo", *solo(),
-                {"cac_volatility":0.8,"admin_overhead":0.3},
-                {"cac_volatility":"flash discounts; IG reels"}, 0.55,[ANEC[0],ANEC[1]]),
-        persona("p3","Harbor Pilates","Rina Ahmed","solo", *solo(premium=True),
-                {"post_promo_churn":0.6,"referral_stagnation":0.5},
-                {"referral_stagnation":"partner spa referrals"}, 0.60,[ANEC[3]]),
-        persona("p4","North Loop Boxing","Caleb Brooks","solo", *solo(),
-                {"cac_volatility":0.7,"scheduling_glitch":0.3},
-                {"cac_volatility":"owner DM’s past members"}, 0.55,[ANEC[0],ANEC[4]]),
-        persona("p5","Greenpoint Climb","Yara Cohen","solo", *solo(premium=True),
-                {"admin_overhead":0.6,"referral_stagnation":0.4},
-                {"admin_overhead":"manual payroll CSV"}, 0.65,[ANEC[2]]),
-        persona("p6","Southside Spin","Owen Kelly","solo", *solo(budget=True),
-                {"post_promo_churn":0.8,"cac_volatility":0.5},
-                {"post_promo_churn":"staff follow-up calls"}, 0.55,[ANEC[3]]),
-        persona("p7","Peak Performance Studio","Daria Novak","solo", *solo(),
-                {"referral_stagnation":0.7,"admin_overhead":0.4},
-                {"referral_stagnation":"script ask after sessions"}, 0.60,[ANEC[2]]),
-        persona("p8","Riverfront Barre","Maya Chen","solo", *solo(premium=True),
-                {"scheduling_glitch":0.4,"cac_volatility":0.6},
-                {"scheduling_glitch":"manual adjustments"}, 0.55,[ANEC[4]]),
-    ]
-    # 4 multi
-    P += [
-        persona("p9","Core Collective","Nate Wallace","multi", *multi(),
-                {"cac_volatility":1.0,"admin_overhead":0.5},
-                {"cac_volatility":"pause spend + phone outreach"}, 0.55,[ANEC[0],ANEC[1]]),
-        persona("p10","MetroFit","Aisha Goyal","multi", *multi(premium=True),
-                {"cac_volatility":0.9,"post_promo_churn":0.6},
-                {"post_promo_churn":"tiered offers; coach callbacks"}, 0.60,[ANEC[0],ANEC[3]]),
-        persona("p11","Titan Athletics","Gabe Ortiz","multi", *multi(budget=True),
-                {"admin_overhead":0.7,"scheduling_glitch":0.4},
-                {"admin_overhead":"ops spreadsheets each Thursday"}, 0.60,[ANEC[2],ANEC[4]]),
-        persona("p12","Northside Strength","Priya Patel","multi", *multi(),
-                {"referral_stagnation":0.7,"cac_volatility":0.6},
-                {"referral_stagnation":"partner network push"}, 0.60,[ANEC[0]])
-    ]
-    return P
+PERSONAS = []
+# 8 Solo
+PERSONAS += [
+    persona("p1","Sunrise Yoga","Lena Park","solo", *solo(budget=True),
+            {"cac_volatility":0.5,"post_promo_churn":0.7,"admin_overhead":0.4},
+            {"post_promo_churn":"Owner texts trial members"}, 0.50,[ANEC[3],ANEC[2]]),
+    persona("p2","Steel City Strength","Marco Diaz","solo", *solo(),
+            {"cac_volatility":0.8,"admin_overhead":0.3},
+            {"cac_volatility":"Flash discounts; IG reels"}, 0.55,[ANEC[0],ANEC[1]]),
+    persona("p3","Harbor Pilates","Rina Ahmed","solo", *solo(premium=True),
+            {"post_promo_churn":0.6,"referral_stagnation":0.5},
+            {"referral_stagnation":"Partner spa referrals"}, 0.60,[ANEC[3]]),
+    persona("p4","North Loop Boxing","Caleb Brooks","solo", *solo(),
+            {"cac_volatility":0.7,"scheduling_glitch":0.3},
+            {"cac_volatility":"DMs to past members"}, 0.55,[ANEC[0],ANEC[4]]),
+    persona("p5","Greenpoint Climb","Yara Cohen","solo", *solo(premium=True),
+            {"admin_overhead":0.6,"referral_stagnation":0.4},
+            {"admin_overhead":"Manual payroll CSV"}, 0.65,[ANEC[2]]),
+    persona("p6","Southside Spin","Owen Kelly","solo", *solo(budget=True),
+            {"post_promo_churn":0.8,"cac_volatility":0.5},
+            {"post_promo_churn":"Staff follow-up calls"}, 0.55,[ANEC[3]]),
+    persona("p7","Peak Performance PT","Daria Novak","solo", *solo(),
+            {"referral_stagnation":0.7,"admin_overhead":0.4},
+            {"referral_stagnation":"Scripted ask after sessions"}, 0.60,[ANEC[2]]),
+    persona("p8","Riverfront Barre","Maya Chen","solo", *solo(premium=True),
+            {"scheduling_glitch":0.4,"cac_volatility":0.6},
+            {"scheduling_glitch":"Manual adjustments"}, 0.55,[ANEC[4]]),
+]
+# 4 Multi
+PERSONAS += [
+    persona("p9","Core Collective","Nate Wallace","multi", *multi(),
+            {"cac_volatility":1.0,"admin_overhead":0.5},
+            {"cac_volatility":"Pause spend + phone outreach"}, 0.55,[ANEC[0],ANEC[1]]),
+    persona("p10","MetroFit","Aisha Goyal","multi", *multi(premium=True),
+            {"cac_volatility":0.9,"post_promo_churn":0.6},
+            {"post_promo_churn":"Tiered offers; coach callbacks"}, 0.60,[ANEC[0],ANEC[3]]),
+    persona("p11","Titan Athletics","Gabe Ortiz","multi", *multi(budget=True),
+            {"admin_overhead":0.7,"scheduling_glitch":0.4},
+            {"admin_overhead":"Ops spreadsheets each Thursday"}, 0.60,[ANEC[2],ANEC[4]]),
+    persona("p12","Northside Strength","Priya Patel","multi", *multi(),
+            {"referral_stagnation":0.7,"cac_volatility":0.6},
+            {"referral_stagnation":"Partner network push"}, 0.60,[ANEC[0]]),
+]
 
-# ================== Flash items (12, with metrics + pain_key) ==================
-def build_flash():
-    return [
-        {"title":"Core Collective — Multi-Site Gym","ptype":"multi","weekly":360,"staff":14,"fee":99,
-         "status":"Revenue steady; CPC spikes create mid-week dips.","challenges":"Volatile paid acquisition","pain_key":"cac_volatility"},
-        {"title":"Sunrise Yoga — Solo Studio","ptype":"solo","weekly":170,"staff":3,"fee":39,
-         "status":"Intro offers convert inconsistently.","challenges":"Churn after promos","pain_key":"post_promo_churn"},
-        {"title":"Harbor Pilates — Solo Studio","ptype":"solo","weekly":210,"staff":4,"fee":119,
-         "status":"Partner spa changed owners; referrals slowed.","challenges":"Referral stagnation","pain_key":"referral_stagnation"},
-        {"title":"MetroFit — Multi-Site Gym","ptype":"multi","weekly":420,"staff":16,"fee":149,
-         "status":"CPC spikes reduce trial volume.","challenges":"Paid acquisition volatility","pain_key":"cac_volatility"},
-        {"title":"Southside Spin — Solo Studio","ptype":"solo","weekly":160,"staff":3,"fee":45,
-         "status":"Good trial volume; poor conversion to monthly.","challenges":"Churn after promos","pain_key":"post_promo_churn"},
-        {"title":"Greenpoint Climb — Solo Studio","ptype":"solo","weekly":200,"staff":4,"fee":129,
-         "status":"Owner fixes payroll with CSV exports.","challenges":"Admin overhead","pain_key":"admin_overhead"},
-        {"title":"North Loop Boxing — Solo Studio","ptype":"solo","weekly":190,"staff":3,"fee":69,
-         "status":"Occasional double-booking at peak.","challenges":"Scheduling glitches","pain_key":"scheduling_glitch"},
-        {"title":"Titan Athletics — Multi-Site Gym","ptype":"multi","weekly":320,"staff":12,"fee":59,
-         "status":"Heavy spreadsheet workflows in ops.","challenges":"Admin overhead","pain_key":"admin_overhead"},
-        {"title":"Peak Performance Studio — Solo Studio","ptype":"solo","weekly":180,"staff":3,"fee":79,
-         "status":"Referrals plateauing this quarter.","challenges":"Referral stagnation","pain_key":"referral_stagnation"},
-        {"title":"Riverfront Barre — Solo Studio","ptype":"solo","weekly":230,"staff":5,"fee":119,
-         "status":"Calendar needs manual adjustments at peak.","challenges":"Scheduling glitches","pain_key":"scheduling_glitch"},
-        {"title":"Northside Strength — Multi-Site Gym","ptype":"multi","weekly":380,"staff":15,"fee":109,
-         "status":"Partner referrals inconsistent.","challenges":"Referral stagnation","pain_key":"referral_stagnation"},
-        {"title":"Steel City Strength — Solo Studio","ptype":"solo","weekly":200,"staff":4,"fee":69,
-         "status":"IG reels help but ads still fluctuate.","challenges":"Paid acquisition volatility","pain_key":"cac_volatility"},
-    ]
+# ================== Flash items (10) with full profile fields ==================
+def flash_from_persona(p):
+    # map persona primary pain to a short status/challenge
+    primary = max(p["pains"], key=lambda k: p["pains"][k])
+    status = {
+        "cac_volatility": "Demand swings when ad costs spike.",
+        "post_promo_churn": "Trial-to-paid conversion is inconsistent.",
+        "admin_overhead": "Owner time drained by payroll/admin fixes.",
+        "scheduling_glitch": "Occasional double-bookings at peak.",
+        "referral_stagnation": "Referral partners cooled off this year."
+    }[primary]
+    challenges = {
+        "cac_volatility": "Predictable lead flow; keep peak classes full.",
+        "post_promo_churn": "Improve onboarding; retain beyond intro offers.",
+        "admin_overhead": "Reduce manual ops; streamline payroll.",
+        "scheduling_glitch": "Eliminate calendar glitches at peak.",
+        "referral_stagnation": "Rebuild partner pipeline; boost referrals."
+    }[primary]
+    return {
+        "title": f"{p['gym_name']} — {SEG_LABEL[p['ptype']]}",
+        "ptype": SEG_LABEL[p["ptype"]],
+        "weekly_clients": p["weekly_clients"],
+        "staff_per": p["staff_per"],
+        "monthly_fee": p["monthly_fee"],
+        "known_for": p["known_for"],
+        "status": status,
+        "challenges": challenges,
+        "primary_pain": primary
+    }
+
+FLASH_ITEMS = [flash_from_persona(p) for p in PERSONAS][:10]  # 10 items
+
+# ================== Channels (UI labels) ==================
+CHANNELS = {
+    "email_list": {"label":"Email List", "bias":{"multi":0.5, "solo":0.5}},
+    "cold_dm":    {"label":"Cold DMs", "bias":{"multi":0.4, "solo":0.6}},
+    "forums":     {"label":"Industry Forums", "bias":{"multi":0.3, "solo":0.7}},
+    "sidewalk":   {"label":"Sidewalk Intercepts", "bias":{"multi":0.2, "solo":0.8}},
+}
+CHANNEL_ORDER = ["email_list","cold_dm","forums","sidewalk"]
 
 # ================== Guided interview Q&A ==================
 STARTERS = [
@@ -152,71 +177,76 @@ FOLLOWUPS = [
     ("use_social_media","Do you use social media?"),
 ]
 
-# Persona-specific answer bank returns text AND the dominant pain_key for synthesis.
 def answers_for(p):
     seg = p["ptype"]
-    premium = p["monthly_fee"] >= 100 or "Premium" in p["known_for"]
-    budget = p["monthly_fee"] <= 60 or "Budget" in p["known_for"]
-    A = {}
-    A["typical_day"] = ("I’m in by 6am to review rosters, coach mornings, then admin and staff check-ins. "
-                        "Evenings are peak classes."), None
-    A["biggest_challenges"] = (
-        ("Keeping classes full mid-week while not drowning in admin.") if seg=="multi"
-        else ("Balancing coaching with manual follow-ups and payroll.")
-    ), ("cac_volatility" if seg=="multi" else "post_promo_churn")
-    A["new_clients_problem"] = (
-        ("When ad costs spike, trials dip; we scramble with outreach.") if seg=="multi"
-        else ("Some months yes—ads get pricey and word-of-mouth stalls.")
-    ), "cac_volatility"
-    A["staff_happy"] = (
-        ("Generally yes, but schedule changes at peak frustrate coaches.") if seg=="multi"
-        else ("They like the community; paperwork and last-minute changes annoy them.")
-    ), ("scheduling_glitch" if seg=="multi" else "admin_overhead")
-    A["brand_image_problem"] = (
-        ("Not really—we’re known for programs and coaching quality.") if premium
-        else ("Brand is fine and friendly; resources are tight.")
-    ), None
-    A["pricing_happy"] = (
-        ("Premium members expect more touches; most are fine, newcomers push back.") if premium
-        else ("Price sensitive crowd—discounts help, but churn rises afterward.")
-    ), ("post_promo_churn" if not premium else None)
-    A["acquisition_channels"] = (
-        ("Paid social, search, partnerships; email list for promos.") if seg=="multi"
-        else ("Instagram reels, local groups, and referral cards.")
-    ), "cac_volatility"
-    A["loyal_customers"] = (
-        ("Long-time members who book coach-led programs; they refer friends.") if seg=="multi"
-        else ("Regulars who love the vibe; they bring friends and buy packs.")
-    ), "referral_stagnation"
-    A["growth_constraints"] = (
-        ("Predictable demand and coach capacity; ads volatility.") if seg=="multi"
-        else ("Owner capacity and inconsistent trial-to-paid conversion.")
-    ), ("cac_volatility" if seg=="multi" else "post_promo_churn")
-    A["use_social_media"] = (
-        ("Yes—IG/TikTok for highlights; LinkedIn for corporate wellness leads.") if seg=="multi"
-        else ("Yes—Instagram mainly; TikTok experiments when there’s time.")
-    ), None
-    return A
+    premium = p["monthly_fee"] >= 100 or p["known_for"].startswith("Premium")
+    return {
+        "typical_day": (
+            f"I open {p['gym_name']} by 6am, review rosters, handle member messages, "
+            "then coach or do admin before evening peak."
+        ),
+        "biggest_challenges": (
+            "Keeping classes full mid-week and staying on top of admin without late nights."
+            if seg=="multi" else
+            "Balancing coaching time with manual follow-ups and payroll."
+        ),
+        "new_clients_problem": (
+            "When ad costs spike, trial sign-ups dip; we scramble with staff outreach."
+            if seg=="multi" else
+            "Some months yes—ads get pricey and word-of-mouth stalls."
+        ),
+        "staff_happy": (
+            "Generally yes, but last-minute schedule shuffles frustrate coaches."
+            if seg=="multi" else
+            "They like the community; paperwork and last-minute changes annoy them."
+        ),
+        "brand_image_problem": (
+            "Not really—we’re known for programs and coaching quality."
+            if premium else
+            "We’re seen as friendly and affordable; brand is fine, resources are tight."
+        ),
+        "pricing_happy": (
+            "Premium members expect concierge touches; most are fine, newcomers push back."
+            if premium else
+            "Price-sensitive crowd—discounts work but churn rises afterward."
+        ),
+        "acquisition_channels": (
+            "Paid social, search, and partnerships; we use the list for promos."
+            if seg=="multi" else
+            "Instagram reels, local groups, and simple referral cards."
+        ),
+        "loyal_customers": (
+            "Long-time members who book coach-led programs; they refer friends."
+            if seg=="multi" else
+            "Regulars who love the vibe; they bring friends and buy class packs."
+        ),
+        "growth_constraints": (
+            "Predictable demand; staffing new time slots; ad volatility."
+            if seg=="multi" else
+            "Owner capacity and inconsistent trial-to-paid conversion."
+        ),
+        "use_social_media": (
+            "Yes—IG and TikTok for highlights; LinkedIn for corporate wellness leads."
+            if seg=="multi" else
+            "Yes—Instagram mainly; TikTok experiments when time allows."
+        ),
+    }
 
 # ================== Sim state & helpers ==================
 def init_state():
     st.session_state.sim = {
         "started": False,
         "tokens": 10,
-        "personas": build_personas(),      # frozen
-        "flash": build_flash(),            # frozen
         "booked": [],
-        "interviews": {},                  # pid -> {log:[{q,a,pain_key}], step:int, finished:bool, asked:set, learnings:str, saved:bool}
+        "interviews": {},  # pid -> {log:[{q,a}], step:int, finished:bool, asked:set, learnings:str}
         "coverage": {"channel_counts": {}},
         "flash_opened": [],
+        "flash_counts": {},   # pain -> count derived from flash openings
         "synthesis": None,
-        "advance_to_live": False,
-        "advance_to_score": False,
+        "go_to_live": False,
+        "go_to_score": False,
         "drafts": {"ph":"", "ntp":""}
     }
-
-def get_persona(pid):
-    return next(p for p in st.session_state.sim["personas"] if p["pid"]==pid)
 
 def sample_by_allocation(allocation):
     draws = max(0, int(sum(allocation.values())))
@@ -224,75 +254,50 @@ def sample_by_allocation(allocation):
     seg_weight = {"solo":0.0,"multi":0.0}
     for ch,toks in allocation.items():
         if toks<=0: continue
-        if ch=="email_list":  seg_weight["solo"] += 0.5*toks; seg_weight["multi"] += 0.5*toks
-        if ch=="cold_dm":     seg_weight["solo"] += 0.6*toks; seg_weight["multi"] += 0.4*toks
-        if ch=="forums":      seg_weight["solo"] += 0.7*toks; seg_weight["multi"] += 0.3*toks
-        if ch=="sidewalk":    seg_weight["solo"] += 0.8*toks; seg_weight["multi"] += 0.2*toks
+        for seg,w in CHANNELS[ch]["bias"].items():
+            seg_weight[seg] += w * toks
     if seg_weight["solo"]==0 and seg_weight["multi"]==0:
         seg_weight = {"solo":1.0,"multi":1.0}
     total = seg_weight["solo"] + seg_weight["multi"]
-    p_solo, p_multi = seg_weight["solo"]/total, seg_weight["multi"]/total
-    pool = st.session_state.sim["personas"][:]
-    random.shuffle(pool)
+    probs = {"solo": seg_weight["solo"]/total, "multi": seg_weight["multi"]/total}
+    pool = PERSONAS[:]  # do not mutate; seeded above
     chosen = []
     for _ in range(min(8, draws)):
-        seg_pick = "solo" if random.random()<p_solo else "multi"
+        seg_pick = random.choices(["solo","multi"], weights=[probs["solo"], probs["multi"]])[0]
         cand = [p for p in pool if p["ptype"]==seg_pick and p["pid"] not in chosen] or [p for p in pool if p["pid"] not in chosen]
         if not cand: break
         chosen.append(cand[0]["pid"])
     return chosen
 
+def get_persona(pid):
+    return next(p for p in PERSONAS if p["pid"]==pid)
+
 def synthesis():
     S = st.session_state.sim
-    counts, quotes, by_seg = {}, {}, {}
-    # interviews
+    counts, quotes = {}, {}
+
+    # Interviews: attribute to persona's primary pain (highest weight)
     for pid, rec in S["interviews"].items():
-        seg = rec["persona"]["ptype"]
-        by_seg[seg] = by_seg.get(seg,0)+1
-        for turn in rec["log"]:
-            pk = turn.get("pain_key")
-            if not pk: continue
-            counts[pk] = counts.get(pk,0)+1
-            quotes.setdefault(pk, []).append(turn["a"])
-    # flash
-    for ftitle in S["flash_opened"]:
-        f = next(x for x in S["flash"] if x["title"]==ftitle)
-        pk = f["pain_key"]
-        counts[pk] = counts.get(pk,0)+1
-        quotes.setdefault(pk, []).append(f"{f['title']}: {f['challenges']}")
-    # top list
+        p = rec["persona"]
+        primary = max(p["pains"], key=lambda k: p["pains"][k])
+        counts[primary] = counts.get(primary, 0) + max(1, len(rec["log"])//2)  # weight by Qs asked
+        for e in rec["log"][:2]:
+            quotes.setdefault(primary, []).append(e["a"])
+
+    # Flash contributions
+    for pain, c in S["flash_counts"].items():
+        counts[pain] = counts.get(pain, 0) + c
+
     top = sorted(counts.keys(), key=lambda k: counts[k], reverse=True)[:5]
+
     # channel bias alert
-    cc = S["coverage"]["channel_counts"]; total = sum(cc.values()) or 1
-    alerts = [f"Over-reliance on {label} ({int(100*n/total)}%)"
-              for (label,n) in [( "Email List",cc.get("email_list",0) ),
-                                ( "Cold DMs",cc.get("cold_dm",0) ),
-                                ( "Industry Forums",cc.get("forums",0) ),
-                                ( "Sidewalk Intercepts",cc.get("sidewalk",0) )] if n/total>0.6]
-    out = {"counts":counts, "quotes":{k:quotes.get(k,[])[:3] for k in top}, "top":top, "segments":by_seg, "alerts":alerts}
+    cc = S["coverage"]["channel_counts"]
+    total = sum(cc.values()) or 1
+    alerts = [f"Over-reliance on {CHANNELS[ch]['label']} ({int(100*n/total)}%)" for ch,n in cc.items() if n/total>0.6]
+
+    out = {"counts":counts,"top":top,"quotes":{k:quotes.get(k,[])[:3] for k in top},"alerts":alerts}
     S["synthesis"]=out
     return out
-
-def quality_heuristics(ph_text, ntp_text, top_pain_label):
-    # PH: reward clarity/length and mention of any pain keywords; bonus if aligned with top pain label words.
-    L = len(ph_text.strip())
-    has_pain_word = any(x in ph_text.lower() for x in ["problem","struggle","challenge","churn","acquisition","overhead","referral","schedule"])
-    aligned = top_pain_label and any(w in ph_text.lower() for w in top_pain_label.lower().split())
-    phq = 0.5
-    phq += 0.2 if L >= 140 else (0.1 if L >= 80 else 0.0)
-    phq += 0.15 if has_pain_word else 0.0
-    phq += 0.15 if aligned else 0.0
-    phq = min(1.0, max(0.0, phq))
-    # NTP: look for assumption/method/metric/threshold hints (not strict wording)
-    ntp_lower = ntp_text.lower()
-    parts = sum([
-        any(w in ntp_lower for w in ["assumption","bet","we believe"]),
-        any(w in ntp_lower for w in ["method","run","concierge","pilot","ads"]),
-        any(w in ntp_lower for w in ["metric","measure","kpi","conversion","variance","on-time"]),
-        any(w in ntp_lower for w in ["threshold","target","success","goal"]),
-    ])
-    ntpq = 0.4 + 0.15*parts
-    return min(1.0, ntpq), phq
 
 def decide_and_score(ph, ntp):
     S = st.session_state.sim
@@ -300,26 +305,39 @@ def decide_and_score(ph, ntp):
     true_top = "cac_volatility"
     chosen_top = syn["top"][0] if syn["top"] else None
     signal = 1.0 if chosen_top==true_top else (0.7 if true_top in syn["top"] else 0.3)
+
     total_qs = sum(len(r["log"]) for r in S["interviews"].values())
-    craft = min(1.0, 0.35 + min(total_qs,10)/15)  # more thoughtful turns → better
+    craft = min(1.0, 0.4 + min(total_qs,10)/20)  # proxy; more thoughtful turns → better
     channels_used = len([1 for n in S["coverage"]["channel_counts"].values() if n>0])
     largest_share = max(S["coverage"]["channel_counts"].values() or [0])/(sum(S["coverage"]["channel_counts"].values()) or 1)
     coverage = 1.0 if (channels_used>=3 and largest_share<=0.6) else 0.6
-    ntpq, phq = quality_heuristics(ph, ntp, PAINS.get(chosen_top,{"label":""})["label"] if chosen_top else "")
-    score = round(100*(0.30*craft+0.15*coverage+0.30*signal+0.15*phq+0.10*ntpq))
+
+    # Softer PS/Plan scoring: clarity & alignment (no forced words)
+    def clarity(s):  # length + structure proxy
+        words = len((s or "").split())
+        return max(0.3, min(1.0, words/40.0))
+    def aligned(s):  # mentions any top pain label words
+        txt = (s or "").lower()
+        labels = [PAINS[k]["label"].lower() for k in syn["top"]]
+        return 1.0 if any(lbl.split()[0] in txt for lbl in labels) else 0.6
+
+    psq = 0.5*clarity(ph) + 0.5*aligned(ph)
+    ntpq = 0.6*clarity(ntp) + 0.4*(1.0 if "threshold" in (ntp or "").lower() or "metric" in (ntp or "").lower() else 0.6)
+
+    score = round(100*(0.30*craft+0.15*coverage+0.30*signal+0.15*psq+0.10*ntpq))
     components = {
-        "Interview Craft": craft,
-        "Coverage": coverage,
-        "Signal Detection": signal,
-        "Problem Statement Quality": phq,
-        "Next Test Plan": ntpq
+        "Interview Craft": round(craft,2),
+        "Coverage": round(coverage,2),
+        "Signal Detection": round(signal,2),
+        "Problem Statement Quality": round(psq,2),
+        "Next Test Plan": round(ntpq,2)
     }
     explanations = {
-        "Interview Craft": "Based on useful questions asked across interviews (more thoughtful turns increases this).",
-        "Coverage": "Diverse channels reduce sampling bias; aim for ≥3 channels and avoid one source dominating.",
-        "Signal Detection": "Whether the top issue you inferred matches the strongest signal in this market.",
-        "Problem Statement Quality": "Assessed by clarity/length and alignment with pains you uncovered.",
-        "Next Test Plan": "Credit for stating a bet, a concrete method, what you’ll measure, and a success target.",
+        "Interview Craft": "Based on number of meaningful turns; thoughtful follow-ons raise this.",
+        "Coverage": "Diverse channels reduce sampling bias; aim for ≥3 and avoid one dominant source.",
+        "Signal Detection": "Whether your inferred top issue matches the emphasized market signal.",
+        "Problem Statement Quality": "Clarity and alignment with surfaced pains (no specific words required).",
+        "Next Test Plan": "Clarity of steps and whether success criteria are explicit (metric/threshold).",
     }
     return {"score":score,"components":components,"explanations":explanations,"chosen_top":chosen_top,"true_top":true_top}
 
@@ -331,23 +349,25 @@ S = st.session_state.sim
 st.title("Startup Simulation: Problem Discovery & Validation")
 tabs = st.tabs(["Intro","Target & Recruit","Live Interviews","Flash Bursts","Synthesis + Decide","Score"])
 
-# ---- Intro (kept simple; no copy changes beyond original intent) ----
+# ---- Intro ----
 with tabs[0]:
     st.subheader("Welcome")
-    st.markdown(
-        """
-**How this works**: Practice the discovery loop — **target → recruit → interview → synthesize → decide**.  
-**Time**: ~75–90 minutes (solo).  
-**What you’ll do**: allocate effort across channels, run short interviews, open flash profiles, synthesize, then draft a problem hypothesis and next test plan.  
-**Goal**: Ask better questions, detect real signals, and choose an evidence-based next test.
-        """
-    )
+    st.markdown("""
+**How it works:** You’ll practice the discovery loop — **target → recruit → interview → synthesize → decide**.  
+**Session length:** ~75–90 minutes (solo).  
+**Objective:** Ask better questions, detect real signals, and choose an evidence-based next test.
+""")
     if not S["started"]:
         if st.button("Start Simulation"):
             S["started"] = True
-            S["advance_to_live"] = False
-            components.html("<script>setTimeout(()=>{const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]) t[1].click();},60)</script>", height=0)
+            # Reliable auto-advance:
+            components.html(
+                "<script>setTimeout(()=>{const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[1]) t[1].click();},50)</script>",
+                height=0
+            )
             st.rerun()
+    else:
+        st.success("Simulation started — move to Target & Recruit.")
 
 # ---- Target & Recruit ----
 with tabs[1]:
@@ -356,19 +376,200 @@ with tabs[1]:
     else:
         st.subheader("Market Brief")
         st.info(SEED_MARKET_BRIEF)
-        st.markdown(
-            "**You have 10 effort tokens** to recruit across channels. "
-            "Each channel differs in yield, bias, and speed. "
-            "**Trade-off**: cover segments vs. depth. Avoid over-reliance on one source."
-        )
-        CHANNELS = {
-            "email_list": "Email List",
-            "cold_dm": "Cold DMs",
-            "forums": "Industry Forums",
-            "sidewalk": "Sidewalk Intercepts",
-        }
+        st.markdown("""
+**You have 10 effort tokens** to recruit across channels.  
+Each channel differs in **yield**, **bias**, and **speed**.  
+**Trade-off:** cover segments vs. depth. Avoid over-reliance on a single channel.
+""")
         cols = st.columns(4)
         alloc = {}
-        for i,ch in enumerate(["email_list","cold_dm","forums","sidewalk"]):
+        for i,ch in enumerate(CHANNEL_ORDER):
             with cols[i]:
-                alloc[ch]=st.number_input(CHANNELS[ch],0,10,0,1
+                alloc[ch] = st.number_input(
+                    CHANNELS[ch]["label"],
+                    min_value=0, max_value=10, value=0, step=1, key=f"alloc_{ch}"
+                )
+        total = sum(alloc.values())
+        st.caption(f"Allocated: **{total}/10** tokens")
+        if st.button("Book Personas", disabled=(total!=10)):
+            S["tokens"] = max(0, S["tokens"]-10)
+            booked = sample_by_allocation(alloc)
+            S["booked"]=booked
+            for ch,n in alloc.items():
+                S["coverage"]["channel_counts"][ch]=S["coverage"]["channel_counts"].get(ch,0)+n
+            for pid in booked:
+                p = get_persona(pid)
+                S["interviews"][pid]={"log":[], "persona":deepcopy(p), "step":0, "finished":False, "asked":set(), "learnings":""}
+            S["go_to_live"]=True
+            components.html("<script>setTimeout(()=>{const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[2]) t[2].click();},60)</script>", height=0)
+            st.rerun()
+
+# ---- Live Interviews ----
+with tabs[2]:
+    if S.get("go_to_live"):
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[2]) t[2].click();</script>", height=0)
+        S["go_to_live"]=False
+    st.subheader("Live Interviews")
+    if not S["booked"]:
+        st.info("Book personas in **Target & Recruit** first.")
+    else:
+        # Stable list (built once from PERSONAS by id)
+        booked_cards = [get_persona(pid) for pid in S["booked"]]
+        with st.expander(f"Booked Personas ({len(booked_cards)})", expanded=True):
+            for p in booked_cards:
+                st.markdown(
+                    f"**{p['owner']} — {p['gym_name']}**  \n"
+                    f"{SEG_LABEL[p['ptype']]} • ~{p['weekly_clients']} weekly clients/studio • {p['staff_per']} staff/studio • ${p['monthly_fee']}/mo  \n"
+                    f"_Known for: {p['known_for']}_"
+                )
+        pid = st.selectbox(
+            "Choose who to interview",
+            S["booked"],
+            format_func=lambda x: get_persona(x)["owner"] + " — " + get_persona(x)["gym_name"]
+        )
+        rec = S["interviews"][pid]; p = rec["persona"]; name = p["owner"]
+
+        st.markdown("#### Transcript")
+        if rec["log"]:
+            st.markdown("\n\n".join([f"**You:** {t['q']}\n\n**{name}:** {t['a']}" for t in rec["log"]]))
+        else:
+            st.caption("_No questions yet. Pick a conversation starter below._")
+
+        # Build options pool; already-asked ones disappear
+        answered = rec["asked"]
+        if not rec["finished"]:
+            st.markdown("#### Ask a question")
+            if rec["step"]==0:
+                pool = [q for q in STARTERS if q[0] not in answered]
+            elif rec["step"]==1:
+                rem_starters = [q for q in STARTERS if q[0] not in answered]
+                pool = rem_starters[:3] + [q for q in FOLLOWUPS if q[0] not in answered][:2]
+            else:
+                pool = [q for q in FOLLOWUPS if q[0] not in answered]
+                if len(pool)<3:
+                    pool += [q for q in STARTERS if q[0] not in answered]
+            A = answers_for(p)
+            pool = pool[:5]
+            cols = st.columns(len(pool)) if pool else [st]
+            for i,(qkey,qtext) in enumerate(pool):
+                with cols[i]:
+                    if st.button(qtext, key=f"{pid}_q_{rec['step']}_{qkey}"):
+                        ans = A.get(qkey, "It depends on the week, but it does come up.")
+                        rec["log"].append({"q": qtext, "a": ans})
+                        rec["asked"].add(qkey)
+                        rec["step"] += 1
+                        st.rerun()
+            if rec["step"]>=2:
+                st.info("You can end the interview when ready.")
+                if st.button("Thank the person and end interview", key=f"end_{pid}"):
+                    rec["finished"]=True
+                    st.rerun()
+        else:
+            st.success("Interview finished.")
+            rec["learnings"]=st.text_area(
+                "Summarize your key learnings from this interview",
+                value=rec.get("learnings",""),
+                placeholder="Top pain, frequency, severity, triggers, workarounds, early willingness to pay…"
+            )
+            if st.button("Submit learnings", key=f"submit_{pid}"):
+                st.toast("Learnings saved.")
+
+# ---- Flash Bursts ----
+with tabs[3]:
+    st.subheader("Flash Bursts")
+    openable = [f["title"] for f in FLASH_ITEMS if f["title"] not in S["flash_opened"]]
+    picks = st.multiselect("Pick up to 5 to open", openable, max_selections=5)
+    if st.button("Open Selected") and picks:
+        for title in picks:
+            if title not in S["flash_opened"]:
+                S["flash_opened"].append(title)
+                f = next(x for x in FLASH_ITEMS if x["title"]==title)
+                # count toward pain signals
+                key = f["primary_pain"]
+                S["flash_counts"][key] = S["flash_counts"].get(key,0)+1
+        st.rerun()
+    for title in S["flash_opened"]:
+        f = next(x for x in FLASH_ITEMS if x["title"]==title)
+        st.info(
+            f"**{f['title']}**  \n"
+            f"{f['ptype']} • ~{f['weekly_clients']} weekly clients/studio • {f['staff_per']} staff/studio • ${f['monthly_fee']}/mo  \n"
+            f"_Known for: {f['known_for']}_  \n\n"
+            f"**How they’re doing:** {f['status']}  \n"
+            f"**Biggest challenges:** {f['challenges']}"
+        )
+
+# ---- Synthesis + Decide ----
+with tabs[4]:
+    st.subheader("Synthesis")
+    if st.button("Run Synthesis") or S.get("synthesis"):
+        syn = synthesis()
+        c1,c2 = st.columns(2)
+        with c1:
+            st.markdown("**Top pains (counts)**")
+            if not syn["top"]:
+                st.write("_No signal yet. Ask more questions and open more flashes._")
+            for k in syn["top"]:
+                st.write(f"- {PAINS[k]['label']}: {syn['counts'][k]}")
+        with c2:
+            st.markdown("**Bias alerts**")
+            if syn["alerts"]:
+                for a in syn["alerts"]: st.warning(a)
+            else:
+                st.success("No major channel bias detected.")
+        st.markdown("**Sample quotes**")
+        for k in syn["top"]:
+            for q in syn["quotes"].get(k,[]):
+                st.caption(f"• {q}")
+
+    st.markdown("---")
+    st.subheader("Decide & Draft")
+    S["drafts"]["ph"]=st.text_area("Your Problem Hypothesis", value=S["drafts"]["ph"])
+    S["drafts"]["ntp"]=st.text_area("Your Next Test Plan", value=S["drafts"]["ntp"])
+    if st.button("Submit"):
+        if not S.get("synthesis"): synthesis()
+        S["go_to_score"]=True
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[5]) t[5].click();</script>", height=0)
+        st.rerun()
+
+# ---- Score ----
+with tabs[5]:
+    st.subheader("Score")
+    if S.get("go_to_score"):
+        components.html("<script>const t=window.parent.document.querySelectorAll('button[role=tab]'); if(t[5]) t[5].click();</script>", height=0)
+        S["go_to_score"]=False
+    if st.button("Compute Score"):
+        res = decide_and_score(S["drafts"].get("ph",""), S["drafts"].get("ntp",""))
+
+        labels = list(res["components"].keys())
+        values = [res["components"][k] for k in labels]
+        if _HAS_MPL:
+            angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+            angles += angles[:1]; values_plot = values + values[:1]
+            fig = plt.figure(figsize=(4,4))  # ~half-size
+            ax = plt.subplot(111, polar=True)
+            ax.plot(angles, values_plot, linewidth=2)
+            ax.fill(angles, values_plot, alpha=0.25)
+            ax.set_xticks(angles[:-1]); ax.set_xticklabels(labels); ax.set_yticklabels([])
+            st.pyplot(fig)
+        else:
+            st.table({"Component":labels,"Score (0–1)":values})
+
+        st.metric("Total Score", f"{res['score']}/100")
+        st.markdown(f"**Your top signal:** {PAINS.get(res['chosen_top'],{'label':'—'}).get('label','—')}  "
+                    f"| **Ground-truth emphasis:** {PAINS['cac_volatility']['label']}")
+
+        st.markdown("### Component breakdown")
+        for k,v in res["components"].items():
+            pct = int(round(v*100))
+            verdict = "Excellent" if pct>=80 else "Good" if pct>=60 else "Mixed" if pct>=40 else "Needs work"
+            why = res["explanations"][k]
+            st.write(f"- **{k}:** {pct}/100 — {verdict}. {why}")
+
+        st.markdown("### Key Lessons")
+        st.markdown("""
+- **When interviewing,** favor open, past-behavior prompts; avoid yes/no and solution-pitching.
+- **When recruiting,** balance channels to reduce bias; aim for at least three distinct sources.
+- **When synthesizing,** combine interview and flash signals; look for repeated pains, not just loud anecdotes.
+- **When drafting hypotheses,** ensure clarity and alignment with surfaced pains (who, pain, consequence).
+- **When planning next tests,** define the method and include a clear metric or success threshold.
+""")
