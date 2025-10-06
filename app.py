@@ -1,15 +1,16 @@
-# Startup Simulation: Problem Discovery & Validation (Streamlit MVP)
-# ------------------------------------------------------------------
+# Startup Simulation: Problem Discovery & Validation (Streamlit)
+# --------------------------------------------------------------
 # Run locally:
 #   pip install -r requirements.txt
 #   streamlit run app.py
-# ------------------------------------------------------------------
+# --------------------------------------------------------------
 
-import random, math, json
+import json, random
 from copy import deepcopy
 import streamlit as st
+import streamlit.components.v1 as components
 
-# ===================== Seed market & data =====================
+# =============== Seed market & data ===============
 
 SEED_MARKET_ID = "independent_gym_owners"
 SEED_MARKET_BRIEF = (
@@ -19,38 +20,28 @@ SEED_MARKET_BRIEF = (
 
 PAINS = {
     "cac_volatility": {
-        "key": "cac_volatility",
-        "label": "Paid acquisition volatility",
-        "base_freq": 0.62,
-        "base_severity": 0.78,
+        "key": "cac_volatility", "label": "Paid acquisition volatility",
+        "base_freq": 0.62, "base_severity": 0.78,
         "notes": "Leads fluctuate with ads; weekly swings affect targets.",
     },
     "post_promo_churn": {
-        "key": "post_promo_churn",
-        "label": "Churn after intro promos",
-        "base_freq": 0.47,
-        "base_severity": 0.65,
+        "key": "post_promo_churn", "label": "Churn after intro promos",
+        "base_freq": 0.47, "base_severity": 0.65,
         "notes": "Trial-to-paid conversion drops; discounts attract wrong users.",
     },
     "admin_overhead": {
-        "key": "admin_overhead",
-        "label": "Admin/payroll overhead",
-        "base_freq": 0.36,
-        "base_severity": 0.45,
+        "key": "admin_overhead", "label": "Admin/payroll overhead",
+        "base_freq": 0.36, "base_severity": 0.45,
         "notes": "Owner spends late nights on payroll/scheduling.",
     },
     "scheduling_glitch": {
-        "key": "scheduling_glitch",
-        "label": "Scheduling tool glitches",
-        "base_freq": 0.22,
-        "base_severity": 0.35,
+        "key": "scheduling_glitch", "label": "Scheduling tool glitches",
+        "base_freq": 0.22, "base_severity": 0.35,
         "notes": "Peak-hours hiccups; more nuisance than critical.",
     },
     "referral_stagnation": {
-        "key": "referral_stagnation",
-        "label": "Referral stagnation",
-        "base_freq": 0.31,
-        "base_severity": 0.50,
+        "key": "referral_stagnation", "label": "Referral stagnation",
+        "base_freq": 0.31, "base_severity": 0.50,
         "notes": "Word-of-mouth plateau; manual scripts required.",
     },
 }
@@ -131,14 +122,16 @@ FLASH_ITEMS = [
     {"fid":"f10","segment_hint":"premium_pt","text":"Referral script feels awkward; staff skip it.","pain_hint":"referral_stagnation"},
 ]
 
+# Channel IDs (internal) → nice labels (UI)
 CHANNELS = {
-    "email_list": {"yield": 0.6, "bias": {"premium_pt": 0.1, "multi_site": 0.5, "solo_studio": 0.4}},
-    "cold_dm":    {"yield": 0.4, "bias": {"premium_pt": 0.2, "multi_site": 0.4, "solo_studio": 0.4}},
-    "forums":     {"yield": 0.5, "bias": {"premium_pt": 0.2, "multi_site": 0.3, "solo_studio": 0.5}},
-    "sidewalk":   {"yield": 0.3, "bias": {"premium_pt": 0.1, "multi_site": 0.2, "solo_studio": 0.7}},
+    "email_list": {"label": "Email list", "yield": 0.6, "bias": {"premium_pt": 0.1, "multi_site": 0.5, "solo_studio": 0.4}},
+    "cold_dm":    {"label": "Cold DMs", "yield": 0.4, "bias": {"premium_pt": 0.2, "multi_site": 0.4, "solo_studio": 0.4}},
+    "forums":     {"label": "Industry forums", "yield": 0.5, "bias": {"premium_pt": 0.2, "multi_site": 0.3, "solo_studio": 0.5}},
+    "sidewalk":   {"label": "Sidewalk intercepts", "yield": 0.3, "bias": {"premium_pt": 0.1, "multi_site": 0.2, "solo_studio": 0.7}},
 }
+CHANNEL_ORDER = ["email_list", "cold_dm", "forums", "sidewalk"]
 
-# ===================== Core engine =====================
+# =============== Core engine ===============
 
 OPEN_PREFIXES = (
     "tell me about", "walk me through", "how did", "what happened", "when was the last",
@@ -184,18 +177,19 @@ def sample_personas_by_allocation(allocation):
     # accumulate segment weights from channel biases
     segment_bias = {k: 0.0 for k in ("solo_studio","multi_site","premium_pt")}
     for ch, toks in allocation.items():
-        if toks <= 0: 
+        if toks <= 0:
             continue
         ch_cfg = CHANNELS.get(ch, {})
         for seg, w in ch_cfg.get("bias", {}).items():
             segment_bias[seg] = segment_bias.get(seg, 0.0) + float(w) * float(toks)
 
-    # fallback if somehow all zeros
+    # fallback if all zeros
     if all(v == 0.0 for v in segment_bias.values()):
         segment_bias = {k: 1.0 for k in ("solo_studio","multi_site","premium_pt")}
 
     total = sum(max(v, 0.01) for v in segment_bias.values()) or 1.0
-    weights = {seg: max(v, 0.01)/total for seg in segment_bias}
+    # BUG FIX: include v in the comprehension!
+    weights = {seg: max(v, 0.01)/total for seg, v in segment_bias.items()}
     segments = list(weights.keys())
 
     pool = PERSONAS[:]
@@ -234,12 +228,8 @@ def gen_response(p, trust, qmeta):
     else:
         resp = f"{anecdote}" if random.random() > 0.4 else f"Yeah, {pain['label']} shows up sometimes."
     structured = {
-        "pain_key": pain_key,
-        "pain_label": pain["label"],
-        "frequency": freq,
-        "severity": round(sev,2),
-        "workaround": workaround,
-        "spend_hint": spend_hint,
+        "pain_key": pain_key, "pain_label": pain["label"], "frequency": freq,
+        "severity": round(sev,2), "workaround": workaround, "spend_hint": spend_hint,
         "confidence": round(trust,2),
     }
     return resp, structured
@@ -329,7 +319,7 @@ def decide_and_score(problem_statement, next_test_plan):
         "chosen_top": chosen_top, "true_top": true_top
     }
 
-# ===================== UI =====================
+# =============== UI ===============
 
 st.set_page_config(page_title="Startup Simulation: Problem Discovery & Validation", page_icon="🧪", layout="wide")
 
@@ -338,7 +328,7 @@ if "sim" not in st.session_state:
 
 st.title("Startup Simulation: Problem Discovery & Validation")
 
-# Tabs: Intro first. The rest are hidden until user clicks Start.
+# Tabs (we’ll auto-jump to Target & Recruit when Start is clicked)
 tabs = st.tabs(["Intro", "Target & Recruit", "Live Interviews", "Flash Bursts", "Synthesis", "Decide & Score"])
 
 # --- Intro ---
@@ -364,9 +354,31 @@ with tabs[0]:
     if not st.session_state.sim["started"]:
         if st.button("Start Simulation"):
             st.session_state.sim["started"] = True
+            # Inject tiny JS to click the second tab automatically.
+            components.html(
+                """
+                <script>
+                const tick = () => {
+                  const tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+                  if (tabs && tabs.length > 1) { tabs[1].click(); }
+                };
+                setTimeout(tick, 50);
+                </script>
+                """,
+                height=0,
+            )
             st.rerun()
     else:
-        st.success("Simulation started — go to the next tab ➜")
+        st.success("Simulation started — moving you to Target & Recruit…")
+        components.html(
+            """
+            <script>
+            const tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+            if (tabs && tabs.length > 1) { tabs[1].click(); }
+            </script>
+            """,
+            height=0,
+        )
 
 # --- 1) Target & Recruit ---
 with tabs[1]:
@@ -380,19 +392,20 @@ with tabs[1]:
             """
 **You have 10 effort tokens** to recruit interviewees across channels.
 Each channel differs in:
-- **Yield**: how likely you are to reach people quickly
-- **Bias**: which sub-segments you’ll over-sample
-- **Speed**: how fast responses land
+- **yield**: how likely you are to reach people quickly
+- **bias**: which sub-segments you’ll over-sample
+- **speed**: how fast responses land
 
-**Trade-off:** Spread tokens to cover segments, or concentrate for depth. Avoid over-reliance on a single channel.
+**Trade-off:** spread tokens to cover segments, or concentrate for depth. Avoid over-reliance on a single channel.
             """
         )
 
         cols = st.columns(4)
         alloc = {}
-        for i, ch in enumerate(["email_list","cold_dm","forums","sidewalk"]):
+        for i, ch_id in enumerate(CHANNEL_ORDER):
             with cols[i]:
-                alloc[ch] = st.number_input(ch, min_value=0, max_value=10, step=1, value=0, key=f"alloc_{ch}")
+                label = CHANNELS[ch_id]["label"]
+                alloc[ch_id] = st.number_input(label, min_value=0, max_value=10, step=1, value=0, key=f"alloc_{ch_id}")
 
         total = sum(alloc.values())
         st.caption(f"Allocated: **{total}/10** tokens")
@@ -403,8 +416,8 @@ Each channel differs in:
             s["tokens"] = max(0, s["tokens"] - 10)
             booked = sample_personas_by_allocation(alloc)
             s["booked"] = booked
-            for ch,n in alloc.items():
-                s["coverage"]["channel_counts"][ch] = s["coverage"]["channel_counts"].get(ch, 0) + n
+            for ch_id, n in alloc.items():
+                s["coverage"]["channel_counts"][ch_id] = s["coverage"]["channel_counts"].get(ch_id, 0) + n
             # init interviews
             for pid in booked:
                 p = get_persona(pid)
