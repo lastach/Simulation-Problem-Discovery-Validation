@@ -578,9 +578,6 @@ with tabs[5]:
     if st.button("Compute Score"):
         res = decide_and_score(S["drafts"].get("ph",""), S["drafts"].get("ntp",""))
 
-        else:
-            st.table({"Component":labels,"Score (0–1)":values})
-
         st.metric("Total Score", f"{res['score']}/100")
 
         st.markdown("### Component breakdown")
