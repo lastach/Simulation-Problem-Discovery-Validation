@@ -578,17 +578,6 @@ with tabs[5]:
     if st.button("Compute Score"):
         res = decide_and_score(S["drafts"].get("ph",""), S["drafts"].get("ntp",""))
 
-        labels = list(res["components"].keys())
-        values = [res["components"][k] for k in labels]
-        if _HAS_MPL:
-            angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
-            angles += angles[:1]; values_plot = values + values[:1]
-            fig = plt.figure(figsize=(3,3))  # smaller
-            ax = plt.subplot(111, polar=True)
-            ax.plot(angles, values_plot, linewidth=2)
-            ax.fill(angles, values_plot, alpha=0.25)
-            ax.set_xticks(angles[:-1]); ax.set_xticklabels(labels); ax.set_yticklabels([])
-            st.pyplot(fig)
         else:
             st.table({"Component":labels,"Score (0–1)":values})
 
