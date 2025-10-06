@@ -353,6 +353,14 @@ def decide_and_score(ph, ntp):
         "Problem Statement Quality": "Clarity and alignment with surfaced pains.",
         "Next Test Plan": "Clarity of steps and whether success criteria are explicit (metric/threshold).",
     }
+    st.markdown("### Key Lessons")
+st.markdown("""
+- **When interviewing:** Use open-ended, empathetic questions. Avoid leading or solution-focused phrasing.
+- **When recruiting:** Balance your channel mix to avoid bias; don’t rely too heavily on a single source.
+- **When synthesizing:** Look for patterns in pains across segments, not just frequency counts.
+- **When drafting:** Ensure your problem statement is specific, evidence-based, and aligned with surfaced pains.
+- **When planning tests:** Define a clear assumption, method, and threshold for success.
+""")
     return {"score":score,"components":components,"explanations":explanations}
 
 # ================== Streamlit app ==================
