@@ -354,14 +354,6 @@ def decide_and_score(ph, ntp):
         "Next Test Plan": "Clarity of steps and whether success criteria are explicit (metric/threshold).",
     }
     return {"score":score,"components":components,"explanations":explanations}
-st.markdown("### Key Lessons")
-st.markdown("""
-- **When interviewing:** Use open-ended, empathetic questions. Avoid leading or solution-focused phrasing.
-- **When recruiting:** Balance your channel mix to avoid bias; don’t rely too heavily on a single source.
-- **When synthesizing:** Look for patterns in pains across segments, not just frequency counts.
-- **When drafting:** Ensure your problem statement is specific, evidence-based, and aligned with surfaced pains.
-- **When planning tests:** Define a clear assumption, method, and threshold for success.
-""")
 
 # ================== Streamlit app ==================
 st.set_page_config(page_title="Startup Simulation: Problem Discovery & Validation", page_icon="🧪", layout="wide")
@@ -608,3 +600,11 @@ with tabs[5]:
             verdict = "Excellent" if pct>=80 else "Good" if pct>=60 else "Mixed" if pct>=40 else "Needs work"
             why = res["explanations"][k]
             st.write(f"- **{k}:** {pct}/100 — {verdict}. {why}")
+            st.markdown("### Key Lessons")
+st.markdown("""
+- **When interviewing,** use open-ended, empathetic questions. Avoid leading or solution-focused phrasing.
+- **When recruiting,** balance your channel mix to avoid bias; don’t rely too heavily on a single source.
+- **When synthesizing,** look for patterns in pains across segments, not just frequency counts.
+- **When drafting,** ensure your problem statement is specific, evidence-based, and aligned with surfaced pains.
+- **When planning tests,** define a clear assumption, method, and explicit success threshold.
+""")
