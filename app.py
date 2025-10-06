@@ -1,14 +1,16 @@
-# Sim #1 — Interviews + Flash Data (Streamlit MVP)
-# ------------------------------------------------
-# Run:  pip install -r requirements.txt
-#       streamlit run app.py
-# ------------------------------------------------
+# Startup Simulation: Problem Discovery & Validation (Streamlit MVP)
+# ------------------------------------------------------------------
+# Run locally:
+#   pip install -r requirements.txt
+#   streamlit run app.py
+# ------------------------------------------------------------------
 
 import random, math, json
 from copy import deepcopy
 import streamlit as st
 
-# --------- Seed market & data (dict-based, no external deps) ---------
+# ===================== Seed market & data =====================
+
 SEED_MARKET_ID = "independent_gym_owners"
 SEED_MARKET_BRIEF = (
     "Independent gym owners managing acquisition volatility, churn after promos, "
@@ -136,7 +138,8 @@ CHANNELS = {
     "sidewalk":   {"yield": 0.3, "bias": {"premium_pt": 0.1, "multi_site": 0.2, "solo_studio": 0.7}},
 }
 
-# --------- Core engine (ported to run in Streamlit session_state) ---------
+# ===================== Core engine =====================
+
 OPEN_PREFIXES = (
     "tell me about", "walk me through", "how did", "what happened", "when was the last",
     "why", "what else", "how do you", "how often"
@@ -159,11 +162,12 @@ def init_session():
         "market": SEED_MARKET_ID,
         "tokens": 10,
         "booked": [],
-        "interviews": {},     # pid -> {log:[{q,meta,a,structured}], trust, evidence, tags, persona}
+        "interviews": {},     # pid -> {log, trust, evidence, tags, persona}
         "coverage": {"channel_counts": {}, "segment_counts": {}},
         "flashes_opened": [],
         "flash_followups": {},
         "synthesis": {},
+        "started": False,
     }
 
 def get_persona(pid):
@@ -172,22 +176,38 @@ def get_persona(pid):
     raise KeyError("persona not found")
 
 def sample_personas_by_allocation(allocation):
-    draws = sum(allocation.values())
+    """Robust channel-biased sampling that never crashes."""
+    draws = max(0, int(sum(allocation.values())))
+    if draws == 0:
+        return []
+
+    # accumulate segment weights from channel biases
+    segment_bias = {k: 0.0 for k in ("solo_studio","multi_site","premium_pt")}
+    for ch, toks in allocation.items():
+        if toks <= 0: 
+            continue
+        ch_cfg = CHANNELS.get(ch, {})
+        for seg, w in ch_cfg.get("bias", {}).items():
+            segment_bias[seg] = segment_bias.get(seg, 0.0) + float(w) * float(toks)
+
+    # fallback if somehow all zeros
+    if all(v == 0.0 for v in segment_bias.values()):
+        segment_bias = {k: 1.0 for k in ("solo_studio","multi_site","premium_pt")}
+
+    total = sum(max(v, 0.01) for v in segment_bias.values()) or 1.0
+    weights = {seg: max(v, 0.01)/total for seg in segment_bias}
+    segments = list(weights.keys())
+
     pool = PERSONAS[:]
     random.shuffle(pool)
     chosen = []
-    segment_bias = {k: 0.0 for k in ("solo_studio","multi_site","premium_pt")}
-    for ch,toks in allocation.items():
-        for seg,w in CHANNELS[ch]["bias"].items():
-            segment_bias[seg] += w * toks
-    total = sum(max(v,0.01) for v in segment_bias.values()) or 1.0
-    weights = {seg: max(v,0.01)/total for seg in segment_bias}
-    segments = list(weights.keys())
     for _ in range(min(8, draws)):
         seg_pick = random.choices(segments, weights=[weights[s] for s in segments])[0]
         cand = [p for p in pool if p["segment"] == seg_pick and p["pid"] not in chosen]
-        if not cand: cand = [p for p in pool if p["pid"] not in chosen]
-        if not cand: break
+        if not cand:
+            cand = [p for p in pool if p["pid"] not in chosen]
+        if not cand:
+            break
         chosen.append(cand[0]["pid"])
     return chosen
 
@@ -309,59 +329,102 @@ def decide_and_score(problem_statement, next_test_plan):
         "chosen_top": chosen_top, "true_top": true_top
     }
 
-# --------- UI ---------
-st.set_page_config(page_title="Sim #1 – Interviews + Flash", page_icon="🧪", layout="wide")
-st.title("Sim #1 — Problem Discovery (Interviews + Flash Data)")
+# ===================== UI =====================
+
+st.set_page_config(page_title="Startup Simulation: Problem Discovery & Validation", page_icon="🧪", layout="wide")
 
 if "sim" not in st.session_state:
     init_session()
 
-with st.sidebar:
-    st.markdown("### Market Brief")
-    st.info(SEED_MARKET_BRIEF)
-    st.markdown("**Tokens available:** {}".format(st.session_state.sim["tokens"]))
+st.title("Startup Simulation: Problem Discovery & Validation")
 
-tabs = st.tabs(["1) Target & Recruit", "2) Live Interviews", "3) Flash Bursts", "4) Synthesis", "5) Decide & Score"])
+# Tabs: Intro first. The rest are hidden until user clicks Start.
+tabs = st.tabs(["Intro", "Target & Recruit", "Live Interviews", "Flash Bursts", "Synthesis", "Decide & Score"])
+
+# --- Intro ---
+with tabs[0]:
+    st.subheader("Welcome")
+    st.markdown(
+        """
+**What this is:** A hands-on simulation to practice the discovery habit loop:
+**target → recruit → interview → code insights → decide**.
+
+**Session length:** 75–90 minutes (solo). One sitting is ideal.
+
+**What you'll do:**
+1. Choose who to target and how to recruit (allocate effort tokens).
+2. Conduct short, live interviews (5–6 minutes each).
+3. Open flash data snippets to boost segment coverage.
+4. Synthesize: tag/code, review heatmaps, quotes, and bias alerts.
+5. Decide: draft a **Problem Hypothesis** and a **Next Test Plan**; get a score.
+
+**Objectives:** Improve interview craft, detect real signals (not noise), and make evidence-based next steps.
+        """
+    )
+    if not st.session_state.sim["started"]:
+        if st.button("Start Simulation"):
+            st.session_state.sim["started"] = True
+            st.rerun()
+    else:
+        st.success("Simulation started — go to the next tab ➜")
 
 # --- 1) Target & Recruit ---
-with tabs[0]:
-    st.subheader("Allocate 10 effort tokens across channels")
-    cols = st.columns(4)
-    alloc = {}
-    for i, ch in enumerate(["email_list","cold_dm","forums","sidewalk"]):
-        with cols[i]:
-            alloc[ch] = st.number_input(ch, min_value=0, max_value=10, step=1, value=0, key=f"alloc_{ch}")
-    total = sum(alloc.values())
-    col_a, col_b = st.columns([1,2])
-    with col_a:
-        if st.button("Book Personas", disabled=(total!=10)):
+with tabs[1]:
+    if not st.session_state.sim["started"]:
+        st.info("Go to the Intro tab and click **Start Simulation**.")
+    else:
+        st.subheader("Market Brief")
+        st.info(SEED_MARKET_BRIEF)
+
+        st.markdown(
+            """
+**You have 10 effort tokens** to recruit interviewees across channels.
+Each channel differs in:
+- **Yield**: how likely you are to reach people quickly
+- **Bias**: which sub-segments you’ll over-sample
+- **Speed**: how fast responses land
+
+**Trade-off:** Spread tokens to cover segments, or concentrate for depth. Avoid over-reliance on a single channel.
+            """
+        )
+
+        cols = st.columns(4)
+        alloc = {}
+        for i, ch in enumerate(["email_list","cold_dm","forums","sidewalk"]):
+            with cols[i]:
+                alloc[ch] = st.number_input(ch, min_value=0, max_value=10, step=1, value=0, key=f"alloc_{ch}")
+
+        total = sum(alloc.values())
+        st.caption(f"Allocated: **{total}/10** tokens")
+        book_btn = st.button("Book Personas", disabled=(total != 10))
+
+        if book_btn:
             s = st.session_state.sim
-            if total != 10:
-                st.warning("Allocate exactly 10 tokens.")
-            else:
-                s["tokens"] -= 10
-                booked = sample_personas_by_allocation(alloc)
-                s["booked"] = booked
-                for ch,n in alloc.items():
-                    s["coverage"]["channel_counts"][ch] = s["coverage"]["channel_counts"].get(ch, 0) + n
-                # init interviews
-                for pid in booked:
-                    p = get_persona(pid)
-                    s["interviews"][pid] = {"log":[], "trust":0.5, "evidence":0.0, "tags":[], "persona": deepcopy(p)}
-                st.success(f"Booked {len(booked)} personas.")
-    with col_b:
+            s["tokens"] = max(0, s["tokens"] - 10)
+            booked = sample_personas_by_allocation(alloc)
+            s["booked"] = booked
+            for ch,n in alloc.items():
+                s["coverage"]["channel_counts"][ch] = s["coverage"]["channel_counts"].get(ch, 0) + n
+            # init interviews
+            for pid in booked:
+                p = get_persona(pid)
+                s["interviews"][pid] = {"log":[], "trust":0.5, "evidence":0.0, "tags":[], "persona": deepcopy(p)}
+            st.success(f"Booked {len(booked)} personas.")
+            if not booked:
+                st.warning("No bookings yet — try redistributing tokens across more channels.")
+
         if st.session_state.sim["booked"]:
-            st.markdown("**Booked:**")
+            st.markdown("**Booked personas:**")
             for pid in st.session_state.sim["booked"]:
                 p = get_persona(pid)
                 st.write(f"- {p['name']} ({p['segment']}) — {p['bio']}")
 
 # --- 2) Live Interviews ---
-with tabs[1]:
-    st.subheader("Run 5 live micro-interviews (4–5 min each)")
+with tabs[2]:
+    st.subheader("Run your live micro-interviews (5–6 min each)")
     s = st.session_state.sim
     if not s["booked"]:
-        st.info("Book personas in tab 1.")
+        st.info("Book personas in **Target & Recruit** first.")
     else:
         pid = st.selectbox("Pick persona", s["booked"], format_func=lambda x: get_persona(x)["name"])
         q = st.text_input("Ask a question (e.g., 'Walk me through the last time …')")
@@ -370,7 +433,10 @@ with tabs[1]:
             if q.strip():
                 resp, strip, trust = ask_question(pid, q)
                 st.session_state.setdefault("transcripts", {}).setdefault(pid, "")
-                st.session_state["transcripts"][pid] += f"\n\n**You:** {q}\n\n**{get_persona(pid)['name']}:** {resp}\n*Trust:* {trust} — *Strip:* {strip}"
+                name = get_persona(pid)['name']
+                st.session_state["transcripts"][pid] += (
+                    f"\n\n**You:** {q}\n\n**{name}:** {resp}\n*Trust:* {trust} — *Strip:* {strip}"
+                )
         tag = c2.selectbox("Quick Tag", ["(choose)","pain","workaround","trigger","frequency","severity","cost","wtp","segment"])
         if c2.button("Add Tag") and tag != "(choose)":
             s["interviews"][pid]["tags"].append(tag)
@@ -379,18 +445,21 @@ with tabs[1]:
         st.markdown(st.session_state.get("transcripts", {}).get(pid, "_Start asking to see transcript..._"))
 
 # --- 3) Flash Bursts ---
-with tabs[2]:
+with tabs[3]:
     st.subheader("Open 5 flash snippets (pick any)")
-    # assemble deck (10 random not-yet-opened)
     s = st.session_state.sim
-    # build deck once
     if "flash_deck" not in s:
         deck = FLASH_ITEMS[:]
         random.shuffle(deck)
         s["flash_deck"] = deck[:10]
-    choices = st.multiselect("Choose up to 5 to open", [f["fid"] for f in s["flash_deck"]],
-                             format_func=lambda fid: f"{fid} ({next(f['segment_hint'] for f in s['flash_deck'] if f['fid']==fid)})",
-                             max_selections=5)
+
+    choices = st.multiselect(
+        "Choose up to 5 to open",
+        [f["fid"] for f in s["flash_deck"]],
+        format_func=lambda fid: f"{fid} ({next(f['segment_hint'] for f in s['flash_deck'] if f['fid']==fid)})",
+        max_selections=5
+    )
+
     if choices:
         for fid in choices:
             f = next(x for x in s["flash_deck"] if x["fid"] == fid)
@@ -412,7 +481,7 @@ with tabs[2]:
                     st.success(f"Clarified: {clar}")
 
 # --- 4) Synthesis ---
-with tabs[3]:
+with tabs[4]:
     st.subheader("Synthesis Sprint")
     if st.button("Run Synthesis"):
         syn = synthesis()
@@ -436,14 +505,15 @@ with tabs[3]:
                 st.caption(f"• {q}")
 
 # --- 5) Decide & Score ---
-with tabs[4]:
+with tabs[5]:
     st.subheader("Decide & Draft")
     ps = st.text_area("Problem Hypothesis",
                       placeholder="Segment with trigger struggle with pain causing impact. They currently workaround ... (WTP hint ...)")
     ntp = st.text_area("Next Test Plan",
                        placeholder="Assumption → Method (offer/concierge/ads) → Metric → Sample size → Success threshold")
     if st.button("Score"):
-        syn = synthesis() if not st.session_state.sim.get("synthesis") else st.session_state.sim["synthesis"]
+        if not st.session_state.sim.get("synthesis"):
+            synthesis()
         res = decide_and_score(ps or "", ntp or "")
         st.metric("Total Score", f"{res['score']}/100")
         c1, c2, c3 = st.columns(3)
