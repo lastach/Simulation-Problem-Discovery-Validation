@@ -600,8 +600,8 @@ with tabs[5]:
             verdict = "Excellent" if pct>=80 else "Good" if pct>=60 else "Mixed" if pct>=40 else "Needs work"
             why = res["explanations"][k]
             st.write(f"- **{k}:** {pct}/100 — {verdict}. {why}")
-            st.markdown("### Key Lessons")
-st.markdown("""
+        st.markdown("### Key Lessons")
+        st.markdown("""
 - **When interviewing,** use open-ended, empathetic questions. Avoid leading or solution-focused phrasing.
 - **When recruiting,** balance your channel mix to avoid bias; don’t rely too heavily on a single source.
 - **When synthesizing,** look for patterns in pains across segments, not just frequency counts.
