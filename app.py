@@ -350,7 +350,7 @@ def decide_and_score(ph, ntp):
         "Signal Detection": f"Whether your inferred top issue matches the emphasized market signal. "
                             f"Your top signal: **{PAINS.get(chosen_top, {'label':'—'}).get('label','—')}**; "
                             f"Ground-truth emphasis: **{PAINS['cac_volatility']['label']}**.",
-        "Problem Statement Quality": "Clarity and alignment with surfaced pains (no specific words required).",
+        "Problem Statement Quality": "Clarity and alignment with surfaced pains.",
         "Next Test Plan": "Clarity of steps and whether success criteria are explicit (metric/threshold).",
     }
     return {"score":score,"components":components,"explanations":explanations}
