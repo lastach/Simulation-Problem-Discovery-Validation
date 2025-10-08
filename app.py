@@ -5,6 +5,7 @@
 import random
 from typing import Dict, Any, List
 import streamlit as st
+import pandas as pd
 
 random.seed(42)
 st.set_page_config(page_title="Simulation #1 — Problem Discovery & Validation", page_icon="🎧", layout="wide")
@@ -227,6 +228,9 @@ def init_state():
             "next_method":"Landing page A/B (comfort vs savings)",
             "next_target":"Signups ≥ 4% of unique visitors"
         },
+        "chosen_segment": None,           # learner's chosen ICP for next step
+        "chosen_pain": None,              # learner's chosen primary pain
+        "decision": "Proceed",            # Proceed / Narrow / Pivot
         "problem_text":"",
         "next_test_text":"",
         "submitted_draft":False,
@@ -339,36 +343,64 @@ def ask(pid:int, qkey:str, qtext:str):
 # ---------- Synthesis ----------
 def run_synthesis():
     pain_kw = {
-        "Hot room":["hot","overheat","sticky"],
-        "Cold room":["cold","draft","chilly"],
-        "High bill":["bill","cost","expensive"],
-        "No control":["landlord","no control","cannot change"],
-        "Noise":["noisy","loud","vent"],
+        "Hot room": ["hot", "overheat", "sticky"],
+        "Cold room": ["cold", "draft", "chilly"],
+        "High bill": ["bill", "cost", "expensive"],
+        "No control": ["landlord", "no control", "cannot change"],
+        "Noise": ["noisy", "loud", "vent"],
     }
-    clusters={k:0 for k in pain_kw}
-    quotes={k:[] for k in pain_kw}
-    # interviews
+    clusters = {k: 0 for k in pain_kw}
+    quotes = {k: [] for k in pain_kw}
+
+    # segment -> cluster counts
+    segments = ["Homeowner", "Renter", "Landlord", "Installer"]
+    seg_cluster = {seg: {c: 0 for c in pain_kw} for seg in segments}
+
+    # interviews: aggregate
+    interviews_done = 0
     for pid, stt in S["interview"].items():
+        if stt["q_count"] > 0:
+            interviews_done += 1
+        seg = INTERVIEW_PERSONAS[pid]["segment"]
         for t in stt["transcript"]:
-            txt=(t["q"]+" "+t["a"]).lower()
-            for c,words in pain_kw.items():
+            txt = (t["q"] + " " + t["a"]).lower()
+            for c, words in pain_kw.items():
                 if any(w in txt for w in words):
-                    clusters[c]+=1
-                    if len(quotes[c])<3: quotes[c].append(t["a"])
-    # flash
+                    clusters[c] += 1
+                    seg_cluster[seg][c] += 1
+                    if len(quotes[c]) < 3:
+                        quotes[c].append(t["a"])
+
+    # flash bursts
+    flash_count = len(S["flash_open"])
     for fidx in S["flash_open"]:
-        f=FLASH_PERSONAS[fidx]; txt=(f["bio"]+" "+f["note"]).lower()
-        for c,words in pain_kw.items():
+        f = FLASH_PERSONAS[fidx]
+        txt = (f["bio"] + " " + f["note"]).lower()
+        for c, words in pain_kw.items():
             if any(w in txt for w in words):
-                clusters[c]+=1
-                if len(quotes[c])<3: quotes[c].append(f["note"])
+                clusters[c] += 1
+                # flash has no exact segment count; skip segment matrix here
+                if len(quotes[c]) < 3:
+                    quotes[c].append(f["note"])
+
     # coverage & bias
-    segs=[INTERVIEW_PERSONAS[pid]["segment"] for pid in S["booked_ids"]]
-    seg_mix={s:segs.count(s) for s in set(segs)}
-    total_alloc=sum(S["alloc"].values())
-    top_ch=max(S["alloc"], key=lambda k:S["alloc"][k]) if total_alloc>0 else None
-    bias = total_alloc>0 and S["alloc"][top_ch] > 0.6*total_alloc
-    S["analytics"]={"clusters":clusters,"quotes":quotes,"seg_mix":seg_mix,"bias_flag":bias,"top_channel":top_ch}
+    segs = [INTERVIEW_PERSONAS[pid]["segment"] for pid in S["booked_ids"]]
+    seg_mix = {s: segs.count(s) for s in set(segs)} if segs else {}
+
+    total_alloc = sum(S["alloc"].values())
+    top_ch = max(S["alloc"], key=lambda k: S["alloc"][k]) if total_alloc > 0 else None
+    bias_flag = total_alloc > 0 and top_ch and S["alloc"][top_ch] > 0.6 * total_alloc
+
+    S["analytics"] = {
+        "clusters": clusters,
+        "quotes": quotes,
+        "seg_mix": seg_mix,
+        "bias_flag": bias_flag,
+        "top_channel": top_ch,
+        "seg_cluster": seg_cluster,
+        "interviews_done": interviews_done,
+        "flash_count": flash_count,
+    }
 
 # ---------- Scoring ----------
 def compute_score():
@@ -392,13 +424,17 @@ def compute_score():
     coverage = clamp((0.6 if seg_div>=3 else 0.35 if seg_div==2 else 0.15) + 0.4*channel_ok,0,1)
     coverage_score=int(100*coverage)
 
-    # detection
-    clusters=S["analytics"]["clusters"]
-    top = max(clusters, key=lambda k:clusters[k]) if clusters else None
-    hypo=S["problem_text"].lower()
-    aligned = 1 if (top and any(w in hypo for w in top.lower().split())) else 0
+    # detection (less brittle): match learner-picked primary pain against top-2 clusters;
+    # use text only for extra credit if numbers present
+    clusters = S["analytics"]["clusters"]
+    top2 = sorted(clusters.items(), key=lambda kv: kv[1], reverse=True)[:2]
+    top_names = [k for k,_ in top2]
+    picked = S.get("chosen_pain")
+    aligned = 1 if (picked in top_names) else 0
+    hypo = S["problem_text"].lower()
     quantified = 1 if any(x in hypo for x in ["%", " times", " per ", " degree", "$"]) else 0
-    detection=int(100*clamp(0.6*aligned+0.4*quantified,0,1))
+    detection = clamp(0.75*aligned + 0.25*quantified, 0, 1)
+    detection = int(100*detection)
 
     # problem
     who_ok = any(s in hypo for s in ["homeowner","renter","landlord","installer"])
@@ -421,7 +457,7 @@ def compute_score():
     S["reasons"]={
         "Interview Craft": f"Open {int(open_pct*100)}%, leading {int(lead_pct*100)}%, avg trust {avg_trust:.2f} (targets: ≥70% open, ≤15% leading, trust ≥0.6).",
         "Coverage": f"Segments: {', '.join(S['analytics'].get('seg_mix',{}).keys()) or 'none'}. Channel bias: {'high' if S['analytics'].get('bias_flag') else 'balanced'}.",
-        "Signal Detection": f"Top cluster match: {'yes' if aligned else 'no'}; quantification: {'yes' if quantified else 'no'}.",
+        "Signal Detection": f"Primary pain you chose: {picked or '—'}; top cluster(s): {', '.join(top_names) or '—'}; quantification: {'yes' if quantified else 'no'}.",
         "Problem Statement": "Checked for specific who, triggers, and testable phrasing.",
         "Next Test Plan": "Checked for clear method and a measurable threshold."
     }
@@ -557,85 +593,118 @@ def page_flash():
 
 def page_synth():
     st.subheader("Synthesis sprint")
-    a=S["analytics"]
+    a = S["analytics"]
     if not a:
         st.warning("No analytics yet. Run synthesis first.")
         return
-    c1,c2=st.columns(2)
+
+    # Left: clusters & quotes | Right: coverage, counts, chart
+    c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Top pain clusters (counts)**")
-        for k,v in sorted(a["clusters"].items(), key=lambda kv: kv[1], reverse=True):
+        for k, v in sorted(a["clusters"].items(), key=lambda kv: kv[1], reverse=True):
             st.write(f"- {k}: {v}")
         st.markdown("**Representative quotes**")
-        for k,qs in a["quotes"].items():
+        for k, qs in a["quotes"].items():
             if qs:
                 st.write(f"- *{k}*")
                 for q in qs:
                     st.caption(f"“{q}”")
+
     with c2:
         st.markdown("**Coverage & bias**")
-        segs=a["seg_mix"]
+        st.write(f"Interviews completed: **{a.get('interviews_done', 0)}**")
+        st.write(f"Flash bursts opened: **{a.get('flash_count', 0)}**")
+        segs = a["seg_mix"]
         if segs:
-            st.write("Segments interviewed: " + ", ".join([f"{k} ({v})" for k,v in segs.items()]))
+            st.write("Segments interviewed: " + ", ".join([f"{k} ({v})" for k, v in segs.items()]))
         else:
             st.write("No interviews recorded.")
         if a["bias_flag"]:
             st.warning(f"Channel bias detected — heavy reliance on {a['top_channel']}.")
         else:
             st.success("Channel mix looks balanced.")
+
+        # Visualization: pains by customer segment
+        st.markdown("**Pains by segment**")
+        df = pd.DataFrame(a["seg_cluster"]).T  # rows=segments, cols=clusters
+        st.bar_chart(df)  # simple comparative view
+
     if st.button("Next: Decide & draft"):
-        S["stage"]="draft"; st.rerun()
+        S["stage"] = "draft"; st.rerun()
 
 def page_draft():
     st.subheader("Decide & draft")
-    st.caption("Fill the fields below — we’ll auto-compose a Problem Hypothesis and a Next Test Plan. You can edit the generated text before submitting.")
-    ds=S["draft_struct"]
-    col1,col2=st.columns(2)
+    st.caption("Pick your focus segment and primary pain, fill a few fields, and we’ll compose a draft you can edit before submitting.")
+
+    a = S.get("analytics", {})
+    # Suggest segments seen; fall back to all
+    seen_segments = list(a.get("seg_mix", {}).keys()) or ["Homeowner", "Renter", "Landlord", "Installer"]
+    cluster_counts = a.get("clusters", {}) or {"Hot room":0,"Cold room":0,"High bill":0,"No control":0,"Noise":0}
+    top2 = sorted(cluster_counts.items(), key=lambda kv: kv[1], reverse=True)[:2]
+    suggested_pains = [k for k,_ in top2] or list(cluster_counts.keys())
+
+    # Decisions
+    dc1, dc2, dc3 = st.columns(3)
+    with dc1:
+        S["chosen_segment"] = st.selectbox("Choose your focus segment", seen_segments, index=0 if S["chosen_segment"] is None else seen_segments.index(S["chosen_segment"]))
+    with dc2:
+        S["chosen_pain"] = st.selectbox("Primary pain to address", suggested_pains, index=0 if (S["chosen_pain"] is None or S["chosen_pain"] not in suggested_pains) else suggested_pains.index(S["chosen_pain"]))
+    with dc3:
+        S["decision"] = st.selectbox("Decision", ["Proceed", "Narrow", "Pivot"], index=["Proceed","Narrow","Pivot"].index(S["decision"]))
+
+    ds = S["draft_struct"]
+    col1, col2 = st.columns(2)
     with col1:
-        ds["who"]=st.selectbox("Customer segment", ["Homeowner","Renter","Landlord","Installer"], index=["Homeowner","Renter","Landlord","Installer"].index(ds["who"]))
-        ds["core_pain"]=st.text_input("Core pain (short)", value=ds["core_pain"])
-        ds["trigger"]=st.text_input("When does it happen? (trigger)", value=ds["trigger"])
-        ds["impact"]=st.text_input("Impact on life/business", value=ds["impact"])
-        ds["workaround"]=st.text_input("Current workaround", value=ds["workaround"])
-        ds["quantifier"]=st.text_input("Any numbers that quantify it", value=ds["quantifier"])
+        ds["core_pain"]  = st.text_input("Core pain (short)", value=ds.get("core_pain",""))
+        ds["trigger"]    = st.text_input("When does it happen? (trigger)", value=ds.get("trigger",""))
+        ds["impact"]     = st.text_input("Impact on life/business", value=ds.get("impact",""))
+        ds["workaround"] = st.text_input("Current workaround", value=ds.get("workaround",""))
+        ds["quantifier"] = st.text_input("Any numbers that quantify it", value=ds.get("quantifier",""))
     with col2:
-        ds["next_method"]=st.text_input("Next test method", value=ds["next_method"])
-        ds["next_target"]=st.text_input("Success threshold (target)", value=ds["next_target"])
+        ds["next_method"] = st.text_input("Next test method", value=ds.get("next_method",""))
+        ds["next_target"] = st.text_input("Success threshold (target)", value=ds.get("next_target",""))
 
-    # Compose drafts
-    composed_hypo = (
-        f"For {ds['who'].lower()}s, {ds['core_pain']} occurs around {ds['trigger']}, causing {ds['impact']}. "
-        f"They currently {ds['workaround']}. We believe a retrofit that improves airflow/comfort would be valuable; "
-        f"evidence so far suggests: {ds['quantifier']}."
-    )
-    composed_next = (
-        f"Run a {ds['next_method']} targeting {ds['who'].lower()}s for 2–4 weeks. "
+    # Compose suggestions (not forced)
+    suggested_hypo = (
+        f"For {S['chosen_segment'].lower()}s, {ds['core_pain']} occurs around {ds['trigger']}, causing {ds['impact']}. "
+        f"They currently {ds['workaround']}. Evidence so far: {ds['quantifier']}."
+    ).strip()
+
+    suggested_next = (
+        f"Run a {ds['next_method']} targeting {S['chosen_segment'].lower()}s for 2–4 weeks. "
         f"Success if {ds['next_target']}."
-    )
+    ).strip()
 
-    st.markdown("**Generated Problem Hypothesis (editable)**")
-    S["problem_text"] = st.text_area("Problem Hypothesis", value=S["problem_text"] or composed_hypo, height=110)
-    st.markdown("**Generated Next Test Plan (editable)**")
-    S["next_test_text"] = st.text_area("Next Test Plan", value=S["next_test_text"] or composed_next, height=100)
+    st.markdown("**Problem Hypothesis (editable)**")
+    S["problem_text"] = st.text_area("Problem Hypothesis", value=S["problem_text"] or suggested_hypo, height=110)
+    st.markdown("**Next Test Plan (editable)**")
+    S["next_test_text"] = st.text_area("Next Test Plan", value=S["next_test_text"] or suggested_next, height=100)
 
-    can_submit = len(S["problem_text"].strip())>20 and len(S["next_test_text"].strip())>10
-    if st.checkbox("I’m satisfied with my hypothesis and next test."):
-        S["submitted_draft"]=True
-    st.caption("You must submit before scoring. You can come back and edit later, but scoring unlocks only after submit.")
+    can_submit = all([
+        S["chosen_segment"],
+        S["chosen_pain"],
+        len(S["problem_text"].strip()) > 20,
+        len(S["next_test_text"].strip()) > 10
+    ])
+
+    st.caption("You must submit before scoring.")
     if st.button("Submit"):
         if can_submit:
-            run_synthesis()  # ensure latest analytics
-            S["submitted_draft"]=True
-            st.success("Submitted. You can now view Feedback & Score.")
+            run_synthesis()   # ensure analytics are fresh
+            S["submitted_draft"] = True
+            S["stage"] = "score"   # auto-advance after submit
+            st.rerun()
         else:
-            st.warning("Please complete both fields with sufficient detail before submitting.")
+            st.warning("Please choose a segment and pain, and complete both text fields before submitting.")
+
     st.divider()
-    colA,colB=st.columns(2)
+    colA, colB = st.columns(2)
     if colA.button("Back to Synthesis"):
-        S["stage"]="synth"; st.rerun()
+        S["stage"] = "synth"; st.rerun()
     if colB.button("Go to Feedback & Score"):
         if S["submitted_draft"]:
-            S["stage"]="score"; st.rerun()
+            S["stage"] = "score"; st.rerun()
         else:
             st.warning("Submit your hypothesis and next test first.")
 
