@@ -536,7 +536,8 @@ def compute_score():
     # coverage
     seg_div=len(S["analytics"].get("seg_mix",{}))
     channel_ok = 0 if S["analytics"].get("bias_flag") else 1
-    coverage = clamp((0.6 if seg_div>=3 else 0.35 if seg_div==2 else 0.15) + 0.4*channel_ok,0,1)
+    seg_base = 0.7 if seg_div>=4 else 0.5 if seg_div>=3 else 0.2 if seg_div==2 else 0.1
+    coverage = clamp(seg_base + 0.3*channel_ok, 0, 1)
     coverage_score=int(100*coverage)
 
     # detection (less brittle): match learner-picked primary pain against top-2 clusters;
@@ -890,9 +891,16 @@ def page_draft():
     st.markdown("**Next Test Plan (editable)**")
     S["next_test_text"] = st.text_area("Next Test Plan", value=S["next_test_text"] or suggested_next, height=100)
 
+    # Require key structured fields to be filled
+    struct_filled = all([
+        ds.get("core_pain","").strip(),
+        ds.get("trigger","").strip(),
+        ds.get("impact","").strip(),
+    ])
     can_submit = all([
         S["chosen_segment"],
         S["chosen_pain"],
+        struct_filled,
         len(S["problem_text"].strip()) > 20,
         len(S["next_test_text"].strip()) > 10
     ])
@@ -905,7 +913,10 @@ def page_draft():
             S["stage"] = "score"   # auto-advance after submit
             st.rerun()
         else:
-            st.warning("Please choose a segment and pain, and complete both text fields before submitting.")
+            if not struct_filled:
+                st.warning("Please fill in Core pain, Trigger, and Impact before submitting.")
+            else:
+                st.warning("Please choose a segment and pain, and write a problem hypothesis (>20 chars) and next test plan (>10 chars).")
 
     st.divider()
     colA, colB = st.columns(2)
@@ -986,9 +997,21 @@ def page_score():
             ch_seg_data[ch] = {seg: round(tokens * weight, 1) for seg, weight in bias.items()}
 
     if ch_seg_data:
+        import altair as alt
         df_ch = pd.DataFrame(ch_seg_data).T
         df_ch.index.name = "Channel"
-        st.bar_chart(df_ch)
+        df_ch = df_ch.reset_index()
+        df_melted = df_ch.melt(id_vars="Channel", var_name="Segment", value_name="Reach")
+        _chart = alt.Chart(df_melted).mark_bar().encode(
+            x=alt.X("Channel:N", axis=alt.Axis(labelAngle=-35, labelLimit=200), sort=None),
+            y=alt.Y("Reach:Q", stack="zero"),
+            color=alt.Color("Segment:N", scale=alt.Scale(
+                domain=["Homeowner","Installer","Landlord","Renter"],
+                range=["#1f77b4","#7fbbdb","#d62728","#f4a0a0"]
+            )),
+            tooltip=["Channel","Segment","Reach"]
+        ).properties(height=350)
+        st.altair_chart(_chart, use_container_width=True)
 
         # Highlight the lesson
         booked_segs = [INTERVIEW_PERSONAS[pid]["segment"] for pid in S["booked_ids"]]
@@ -1032,11 +1055,15 @@ def page_score():
     top_pains = ", ".join([f"{k} ({v})" for k, v in sorted_clusters[:3]]) if sorted_clusters else "None"
     booked_names = ", ".join([f"{INTERVIEW_PERSONAS[pid]['name']} ({INTERVIEW_PERSONAS[pid]['segment']})" for pid in S["booked_ids"]])
 
-    # Collect top quotes
+    # Collect top quotes, deduplicating by base answer (before "The key issue is:" suffix)
+    import re as _re
     top_quotes = []
+    _seen_bases = set()
     for _, qs in a.get("quotes", {}).items():
         for q in qs:
-            if q not in top_quotes:
+            base = _re.split(r"\s*The key issue is:", q)[0].strip()
+            if base not in _seen_bases:
+                _seen_bases.add(base)
                 top_quotes.append(q)
             if len(top_quotes) >= 3:
                 break
