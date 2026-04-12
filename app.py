@@ -1,5 +1,5 @@
 # app_sim1.py
-# Simulation #1 — Problem Discovery & Validation (ThermaLoop)
+# Problem Discovery & Validation (ThermaLoop)
 # Run: streamlit run app_sim1.py
 
 import random
@@ -7,9 +7,9 @@ from typing import Dict, Any, List
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Simulation #1 — Problem Discovery & Validation", page_icon="🎧", layout="wide")
+st.set_page_config(page_title="Problem Discovery & Validation", page_icon="🎧", layout="wide")
 
-TITLE = "Simulation #1 — Problem Discovery & Validation"
+TITLE = "Problem Discovery & Validation"
 SUB   = "ThermaLoop: exploring home comfort and energy efficiency pains"
 
 MARKET_BRIEF = (
