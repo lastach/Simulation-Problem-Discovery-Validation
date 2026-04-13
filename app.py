@@ -505,11 +505,26 @@ def run_synthesis():
     top_ch = max(S["alloc"], key=lambda k: S["alloc"][k]) if total_alloc > 0 else None
     bias_flag = total_alloc > 0 and top_ch and S["alloc"][top_ch] > 0.6 * total_alloc
 
+    # Continuous sampling-bias concentration score (Herfindahl-style on channels + segments)
+    if total_alloc > 0:
+        ch_shares = [v/total_alloc for v in S["alloc"].values() if v > 0]
+        ch_hhi = sum(s*s for s in ch_shares)  # 1.0 = all one channel, low = diverse
+    else:
+        ch_hhi = 1.0
+    if seg_mix:
+        seg_total = sum(seg_mix.values())
+        seg_shares = [v/seg_total for v in seg_mix.values() if v > 0]
+        seg_hhi = sum(s*s for s in seg_shares)
+    else:
+        seg_hhi = 1.0
+    bias_score = round(0.5 * ch_hhi + 0.5 * seg_hhi, 3)  # 0=perfect diversity, 1=total concentration
+
     S["analytics"] = {
         "clusters": clusters,
         "quotes": quotes,
         "seg_mix": seg_mix,
         "bias_flag": bias_flag,
+        "bias_score": bias_score,
         "top_channel": top_ch,
         "seg_cluster": seg_cluster,
         "interviews_done": interviews_done,
@@ -538,6 +553,13 @@ def compute_score():
     channel_ok = 0 if S["analytics"].get("bias_flag") else 1
     seg_base = 0.7 if seg_div>=4 else 0.5 if seg_div>=3 else 0.2 if seg_div==2 else 0.1
     coverage = clamp(seg_base + 0.3*channel_ok, 0, 1)
+    # Explicit sampling-bias penalty (Customer Development principle: diversify
+    # sources before drawing conclusions). Applied continuously, not a flag.
+    bias_score = S["analytics"].get("bias_score", 0)
+    if bias_score > 0.6:
+        # linear penalty from 0% at bias=0.6 to 30% at bias=1.0
+        penalty = min(0.30, (bias_score - 0.6) * 0.75)
+        coverage = max(0.0, coverage * (1 - penalty))
     coverage_score=int(100*coverage)
 
     # detection (less brittle): match learner-picked primary pain against top-2 clusters;
@@ -1034,6 +1056,55 @@ def page_score():
 
     for lesson in lessons[:5]:
         st.write(f"- {lesson}")
+
+    # --- Named theoretical frameworks ---
+    st.markdown("#### Theoretical grounding")
+    st.markdown(
+        "- **Customer Development (Steve Blank, 2005):** Problem discovery must precede product/solution design. "
+        "You practiced *customer discovery* — the first of four Customer Development stages.\n"
+        "- **Lean Startup (Eric Ries, 2011):** The purpose of this phase is *validated learning*, not "
+        "finished hypotheses. Your score reflects the quality of evidence, not the persuasiveness of your pitch.\n"
+        "- **Jobs-to-be-Done (Christensen et al., 2016):** A well-formed problem statement names a specific "
+        "*who*, a *trigger* (the job being done), and a measurable *impact*. The scoring rubric enforces this."
+    )
+
+    # --- Trust delta summary (rapport-building skill feedback) ---
+    st.markdown("#### Trust trajectory across your interviews")
+    trust_rows = []
+    for pid, stt in S["interview"].items():
+        if stt["q_count"] == 0:
+            continue
+        p = INTERVIEW_PERSONAS[pid]
+        start_trust = 0.4 if p["segment"] in ["Landlord", "Installer"] else 0.5
+        end_trust = stt["trust"]
+        delta = end_trust - start_trust
+        unlocked = end_trust >= p["tell_threshold"]
+        trust_rows.append({
+            "Persona": f"{p['name']} ({p['segment']})",
+            "Start trust": round(start_trust, 2),
+            "End trust": round(end_trust, 2),
+            "Δ": f"{delta:+.2f}",
+            "Material pains unlocked": "Yes" if unlocked else "No",
+        })
+    if trust_rows:
+        df_trust = pd.DataFrame(trust_rows)
+        st.dataframe(df_trust, use_container_width=True, hide_index=True)
+        avg_delta = sum(float(r["Δ"]) for r in trust_rows) / len(trust_rows)
+        if avg_delta >= 0.1:
+            st.success(f"Average trust Δ: {avg_delta:+.2f}. You built rapport across interviews — a core Customer Development skill.")
+        elif avg_delta <= -0.1:
+            st.warning(f"Average trust Δ: {avg_delta:+.2f}. Leading or solution-focused questions eroded rapport. Start broader next round.")
+        else:
+            st.info(f"Average trust Δ: {avg_delta:+.2f}. Mixed rapport. A ≥+0.10 average is where material pains reliably unlock.")
+
+    # Sampling-bias explicit disclosure
+    bscore = S["analytics"].get("bias_score", 0)
+    if bscore > 0.6:
+        st.warning(
+            f"**Sampling-bias concentration: {bscore:.2f}** (above 0.60 threshold). "
+            f"Your Coverage score was penalized. In real fieldwork, concentrating outreach on one channel or "
+            f"one segment is the #1 source of false-positive problem discovery (see Blank, *The Four Steps to the Epiphany*, Ch. 2)."
+        )
 
     # --- Channel-to-segment causality (#5) ---
     st.markdown("#### How your channels shaped your sample")
