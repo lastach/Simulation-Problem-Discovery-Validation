@@ -1057,18 +1057,7 @@ def page_score():
     for lesson in lessons[:5]:
         st.write(f"- {lesson}")
 
-    # --- Named theoretical frameworks ---
-    st.markdown("#### Theoretical grounding")
-    st.markdown(
-        "- **Customer Development (Steve Blank, 2005):** Problem discovery must precede product/solution design. "
-        "You practiced *customer discovery* — the first of four Customer Development stages.\n"
-        "- **Lean Startup (Eric Ries, 2011):** The purpose of this phase is *validated learning*, not "
-        "finished hypotheses. Your score reflects the quality of evidence, not the persuasiveness of your pitch.\n"
-        "- **Jobs-to-be-Done (Christensen et al., 2016):** A well-formed problem statement names a specific "
-        "*who*, a *trigger* (the job being done), and a measurable *impact*. The scoring rubric enforces this."
-    )
-
-    # --- Trust delta summary (rapport-building skill feedback) ---
+    # --- Trust trajectory table (rapport-building signal per interview) ---
     st.markdown("#### Trust trajectory across your interviews")
     trust_rows = []
     for pid, stt in S["interview"].items():
@@ -1091,19 +1080,19 @@ def page_score():
         st.dataframe(df_trust, use_container_width=True, hide_index=True)
         avg_delta = sum(float(r["Δ"]) for r in trust_rows) / len(trust_rows)
         if avg_delta >= 0.1:
-            st.success(f"Average trust Δ: {avg_delta:+.2f}. You built rapport across interviews — a core Customer Development skill.")
+            st.success(f"Average trust Δ: {avg_delta:+.2f}. Rapport built across interviews — material pains unlock at ≥ tell-threshold.")
         elif avg_delta <= -0.1:
             st.warning(f"Average trust Δ: {avg_delta:+.2f}. Leading or solution-focused questions eroded rapport. Start broader next round.")
         else:
-            st.info(f"Average trust Δ: {avg_delta:+.2f}. Mixed rapport. A ≥+0.10 average is where material pains reliably unlock.")
+            st.info(f"Average trust Δ: {avg_delta:+.2f}. Mixed. Material pains reliably unlock only above a +0.10 average.")
 
-    # Sampling-bias explicit disclosure
+    # Sampling-bias concentration disclosure (continuous Herfindahl metric)
     bscore = S["analytics"].get("bias_score", 0)
     if bscore > 0.6:
         st.warning(
             f"**Sampling-bias concentration: {bscore:.2f}** (above 0.60 threshold). "
-            f"Your Coverage score was penalized. In real fieldwork, concentrating outreach on one channel or "
-            f"one segment is the #1 source of false-positive problem discovery (see Blank, *The Four Steps to the Epiphany*, Ch. 2)."
+            f"Your Coverage score was penalized. Concentrated outreach — one channel or segment "
+            f"dominating — is the most common source of false-positive problem discovery."
         )
 
     # --- Channel-to-segment causality (#5) ---
