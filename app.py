@@ -449,24 +449,40 @@ def run_synthesis():
     segments = ["Homeowner", "Renter", "Landlord", "Installer"]
     seg_cluster = {seg: {c: 0 for c in pain_kw} for seg in segments}
 
-    # interviews: aggregate, but weight by question depth
-    # Deeper interviews (more questions) contribute more signal per cluster hit
+    # interviews: aggregate with TWO multipliers:
+    #   (a) depth weight — more questions asked = deeper signal
+    #   (b) segment saturation decay — each additional interview in the same
+    #       segment yields LESS information density. After the 3rd interview
+    #       in a segment, each new interview's signal decays as 0.8^(n-3).
+    #       This is the real phenomenon: the 5th homeowner tells you very
+    #       little the first 3 didn't. Forces learners to diversify segments.
     interviews_done = 0
     total_questions_asked = 0
-    for pid, stt in S["interview"].items():
-        if stt["q_count"] > 0:
-            interviews_done += 1
-            total_questions_asked += stt["q_count"]
+    # Sort interview PIDs by booking order so we count in sequence per segment
+    ordered_pids = [pid for pid in S["booked_ids"] if pid in S["interview"] and S["interview"][pid]["q_count"] > 0]
+    segment_interview_count = {seg: 0 for seg in segments}
+    saturation_by_seg: Dict[str, float] = {}   # avg saturation per segment for display
+    for pid in ordered_pids:
+        stt = S["interview"][pid]
+        interviews_done += 1
+        total_questions_asked += stt["q_count"]
         seg = INTERVIEW_PERSONAS[pid]["segment"]
-        # Weight: interviews with more questions yield stronger signal
+        segment_interview_count[seg] += 1
+        n_in_seg = segment_interview_count[seg]
+        # Saturation decay: full value for first 3, then 0.8^(n-3)
+        saturation = 1.0 if n_in_seg <= 3 else 0.8 ** (n_in_seg - 3)
+        saturation_by_seg[seg] = saturation  # latest saturation for that segment
+        # Depth weight: more questions = deeper signal
         depth_weight = min(2.0, 1.0 + (stt["q_count"] - MIN_QUESTIONS_PER_INTERVIEW) * 0.25)
         depth_weight = max(0.5, depth_weight)
+        # Effective weight = depth × saturation
+        eff_weight = depth_weight * saturation
         for t in stt["transcript"]:
             txt = (t["q"] + " " + t["a"]).lower()
             for c, words in pain_kw.items():
                 if any(w in txt for w in words):
-                    clusters[c] += depth_weight
-                    seg_cluster[seg][c] += depth_weight
+                    clusters[c] += eff_weight
+                    seg_cluster[seg][c] += eff_weight
                     if len(quotes[c]) < 3:
                         quotes[c].append(t["a"])
 
@@ -478,8 +494,9 @@ def run_synthesis():
                     pain_text = pain["text"].lower()
                     for c, words in pain_kw.items():
                         if any(w in pain_text for w in words):
-                            clusters[c] += pain["freq"] * 0.5  # frequency-weighted
-                            seg_cluster[seg][c] += pain["freq"] * 0.5
+                            # Material-pain unlocks also decay with saturation
+                            clusters[c] += pain["freq"] * 0.5 * saturation
+                            seg_cluster[seg][c] += pain["freq"] * 0.5 * saturation
 
     # Round cluster counts for display
     clusters = {k: round(v, 1) for k, v in clusters.items()}
@@ -519,6 +536,11 @@ def run_synthesis():
         seg_hhi = 1.0
     bias_score = round(0.5 * ch_hhi + 0.5 * seg_hhi, 3)  # 0=perfect diversity, 1=total concentration
 
+    # Average "last-interview saturation" across segments the learner hit.
+    # 1.0 = every segment still yielding new info; <0.5 = grinding same segment.
+    avg_saturation = (sum(saturation_by_seg.values()) / len(saturation_by_seg)
+                      if saturation_by_seg else 1.0)
+
     S["analytics"] = {
         "clusters": clusters,
         "quotes": quotes,
@@ -530,6 +552,8 @@ def run_synthesis():
         "interviews_done": interviews_done,
         "flash_count": flash_count,
         "total_questions": total_questions_asked,
+        "segment_interview_count": segment_interview_count,
+        "avg_saturation": round(avg_saturation, 2),
     }
 
 # ---------- Scoring ----------
@@ -548,18 +572,26 @@ def compute_score():
     craft = 0.5*min(1.0, open_pct/0.7) + 0.3*max(0, 1 - max(0,(lead_pct-0.15)/0.85)) + 0.2*min(1.0, avg_trust/0.6)
     craft_score=int(100*craft)
 
-    # coverage
+    # coverage — composite of segment diversity, channel balance, and saturation
     seg_div=len(S["analytics"].get("seg_mix",{}))
     channel_ok = 0 if S["analytics"].get("bias_flag") else 1
     seg_base = 0.7 if seg_div>=4 else 0.5 if seg_div>=3 else 0.2 if seg_div==2 else 0.1
     coverage = clamp(seg_base + 0.3*channel_ok, 0, 1)
-    # Explicit sampling-bias penalty (Customer Development principle: diversify
-    # sources before drawing conclusions). Applied continuously, not a flag.
+    # Continuous sampling-bias penalty (HHI-based concentration).
     bias_score = S["analytics"].get("bias_score", 0)
     if bias_score > 0.6:
         # linear penalty from 0% at bias=0.6 to 30% at bias=1.0
         penalty = min(0.30, (bias_score - 0.6) * 0.75)
         coverage = max(0.0, coverage * (1 - penalty))
+    # Saturation penalty: the 5th homeowner interview tells you almost
+    # nothing the first 3 didn't. If the learner ground a single segment,
+    # their last interviews added <50% of an early interview's info value —
+    # which means their headline "N interviews" overstates coverage.
+    avg_sat = S["analytics"].get("avg_saturation", 1.0)
+    if avg_sat < 0.7:
+        # Linear penalty: 0% at 0.7, up to 25% at 0.3
+        sat_penalty = min(0.25, (0.7 - avg_sat) * 0.625)
+        coverage = max(0.0, coverage * (1 - sat_penalty))
     coverage_score=int(100*coverage)
 
     # detection (less brittle): match learner-picked primary pain against top-2 clusters;
@@ -1094,6 +1126,41 @@ def page_score():
             f"Your Coverage score was penalized. Concentrated outreach — one channel or segment "
             f"dominating — is the most common source of false-positive problem discovery."
         )
+
+    # Segment saturation disclosure: show per-segment interview counts and
+    # the information-value decay the learner incurred.
+    seg_counts_disp = S["analytics"].get("segment_interview_count", {})
+    avg_sat = S["analytics"].get("avg_saturation", 1.0)
+    if seg_counts_disp:
+        st.markdown("#### Segment saturation")
+        st.caption(
+            "The first 3 interviews in a segment contribute full-weight signal. "
+            "The 4th contributes 80%. The 5th, 64%. The 6th, 51%. Diminishing "
+            "returns are the real phenomenon — your 5th homeowner rarely tells you "
+            "what the first 3 didn't. This is why coverage is penalized when the "
+            "same segment is over-sampled instead of diversifying."
+        )
+        sat_rows = []
+        for seg, n in seg_counts_disp.items():
+            if n == 0:
+                continue
+            last_sat = 1.0 if n <= 3 else 0.8 ** (n - 3)
+            sat_rows.append({
+                "Segment": seg,
+                "Interviews": n,
+                "Info-weight on last interview": f"{last_sat:.2f}",
+                "Status": "Full-weight" if n <= 3 else "Saturating" if n <= 5 else "Over-sampled",
+            })
+        if sat_rows:
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(sat_rows), use_container_width=True, hide_index=True)
+        if avg_sat < 0.7:
+            st.warning(
+                f"**Average saturation across segments: {avg_sat:.2f}** (below 0.70). "
+                f"Your Coverage score was additionally penalized. The fix is to book "
+                f"interviews in **under-sampled** segments before running another in a "
+                f"saturated one — information density per token is higher."
+            )
 
     # --- Channel-to-segment causality (#5) ---
     st.markdown("#### How your channels shaped your sample")
