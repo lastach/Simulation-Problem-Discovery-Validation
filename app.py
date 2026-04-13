@@ -602,16 +602,29 @@ def header():
 
 # ---------- Pages ----------
 def page_intro():
-    st.subheader("How this simulation works")
+    st.subheader("The founder's job in this simulation")
     st.markdown("""
-1) **Target & recruit** with 10 effort tokens.  
-2) **Interview** your booked personas (guided questions, one by one).  
-3) Open **flash bursts** to broaden coverage.  
-4) **Synthesize** patterns (clusters, quotes, bias).  
-5) **Draft** a problem hypothesis & next test (with structured fields).  
-6) Submit and view **feedback & score**.
+You're exploring whether **ThermaLoop** — a smart ventilation retrofit kit — solves a real,
+painful, frequent problem for a real group of people. You haven't built anything yet. Your
+job right now is simple and hard: **talk to enough of the right humans to know what you're
+actually solving**, and for whom.
+
+In the real world, most startups die because they built the wrong thing for the wrong person.
+This simulation puts you in the middle of that risk — recruiting, interviewing, synthesizing,
+and making a call on where to go next.
+
+**You'll move through six phases:**
+
+1. **Target & recruit** — allocate outreach across channels to book interviews.
+2. **Interview** — ask real questions, build rapport, and listen for pain.
+3. **Flash bursts** — unlock quick signals from adjacent personas.
+4. **Synthesize** — cluster pains, spot segment bias, pull quotes.
+5. **Decide & draft** — pick a focus, pre-fill your hypothesis, edit, submit.
+6. **Score & feedback** — see how rigorous your discovery was.
+
+**About 15–20 minutes.** Write like a founder, not a student. Your hypothesis is a bet.
 """)
-    if st.button("Start simulation"):
+    if st.button("Start simulation", type="primary"):
         S["stage"]="target"; st.rerun()
 
 def page_target():
@@ -724,11 +737,18 @@ def page_live():
         st.caption("No questions asked yet.")
 
     st.divider()
+    # Minimum interviews gate: require at least 3 ended interviews before advancing.
+    MIN_INTERVIEWS_ENDED = 3
+    ended_count = sum(1 for pid in S["booked_ids"] if S["interview"].get(pid, {}).get("ended"))
     c1, c2 = st.columns(2)
     if c1.button("Back to Target"):
         S["stage"]="target"; st.rerun()
-    if c2.button("Go to Flash Bursts"):
-        S["stage"]="flash"; st.rerun()
+    if ended_count >= MIN_INTERVIEWS_ENDED:
+        if c2.button("Go to Flash Bursts"):
+            S["stage"]="flash"; st.rerun()
+    else:
+        with c2:
+            st.caption(f"End at least {MIN_INTERVIEWS_ENDED} interviews before advancing ({ended_count} of {MIN_INTERVIEWS_ENDED} done).")
 
 def page_flash():
     st.subheader("Flash bursts — quick coverage")
@@ -845,7 +865,7 @@ def page_synth():
 
 def page_draft():
     st.subheader("Decide & draft")
-    st.caption("Pick your focus segment and primary pain, fill a few fields, and we'll compose a draft you can edit before submitting.")
+    st.caption("We've pre-filled the fields using what you learned in your interviews. Edit anything that doesn't match your read of the evidence, then submit.")
 
     a = S.get("analytics", {})
     # Suggest segments seen; fall back to all
@@ -853,6 +873,37 @@ def page_draft():
     cluster_counts = a.get("clusters", {}) or {"Hot room":0,"Cold room":0,"High bill":0,"No control":0,"Noise":0}
     top2 = sorted(cluster_counts.items(), key=lambda kv: kv[1], reverse=True)[:2]
     suggested_pains = [k for k,_ in top2] or list(cluster_counts.keys())
+
+    # Pre-fill structured draft fields from interview data the first time the learner lands here.
+    ds = S["draft_struct"]
+    if not S.get("_draft_prefilled"):
+        top_cluster = top2[0][0] if top2 else "Cold room"
+        PAIN_DEFAULTS = {
+            "Cold room":  {"core_pain": "Cold room that no thermostat setting fixes",
+                           "trigger": "During winter evenings or early mornings",
+                           "impact": "Discomfort, sleep disruption, and rising energy bills"},
+            "Hot room":   {"core_pain": "A single room that overheats compared to the rest of the house",
+                           "trigger": "During summer afternoons or during heavy HVAC use",
+                           "impact": "Unusable space, family conflict over thermostat, wasted cooling"},
+            "High bill":  {"core_pain": "Energy bill keeps climbing without explanation",
+                           "trigger": "Peak heating and cooling seasons",
+                           "impact": "Household budget stress and loss of trust in current HVAC"},
+            "No control": {"core_pain": "No room-level control over temperature or airflow",
+                           "trigger": "Whenever any single occupant wants a different setting",
+                           "impact": "Constant compromise, arguments, and inefficient whole-home heating"},
+            "Noise":      {"core_pain": "HVAC system is loud enough to disrupt sleep and work",
+                           "trigger": "Whenever the system cycles on, especially at night",
+                           "impact": "Poor sleep, Zoom call disruption, and ongoing annoyance"},
+        }
+        defaults = PAIN_DEFAULTS.get(top_cluster, PAIN_DEFAULTS["Cold room"])
+        if not ds.get("core_pain"):   ds["core_pain"]   = defaults["core_pain"]
+        if not ds.get("trigger"):     ds["trigger"]     = defaults["trigger"]
+        if not ds.get("impact"):      ds["impact"]      = defaults["impact"]
+        if not ds.get("workaround"):  ds["workaround"]  = "Space heater, fan, closed vents, or tolerating it"
+        if not ds.get("quantifier"):  ds["quantifier"]  = f"{sum(cluster_counts.values())} mentions across interviews; {top2[0][1] if top2 else 0} tied to this cluster"
+        if not ds.get("next_method"): ds["next_method"] = "10-person concierge pilot with ThermaLoop install"
+        if not ds.get("next_target"): ds["next_target"] = "8 of 10 report noticeable improvement within 2 weeks"
+        S["_draft_prefilled"] = True
 
     # Decisions
     dc1, dc2, dc3 = st.columns(3)
